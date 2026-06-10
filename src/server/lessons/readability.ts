@@ -64,6 +64,12 @@ export function fleschKincaidGrade(text: string): number {
 /**
  * Strip crude markdown symbols (backticks, asterisks, links) from a string
  * before readability scoring, so they don't inflate syllable counts.
+ *
+ * Known limitation: fused camelCase identifiers (e.g. `myVariable`, `userData`)
+ * are treated as single words after backtick stripping. The vowel-group heuristic
+ * therefore undercounts their syllables, which slightly lowers the FK grade for
+ * articles heavy in inline code. For typical educational prose this is within
+ * the ±1.5 tolerance accepted by the calibration tests.
  */
 export function stripMarkdown(text: string): string {
   return (

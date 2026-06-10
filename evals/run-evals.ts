@@ -29,6 +29,7 @@ import * as s from '../src/db/schema/index.js';
 import { createLessonRow, stagePlan, stageResearch, stageGenerate } from '../src/server/lessons/pipeline.js';
 import { lessonContentSchema } from '../src/server/lessons/blocks.js';
 import { validateLessonContent } from '../src/server/lessons/validate.js';
+import { stripContentAnswerKey } from '../src/app/api/lessons/[lessonId]/route.js';
 
 // ── flags ─────────────────────────────────────────────────────────────────────
 
@@ -159,6 +160,17 @@ async function cleanupFixture(db: Db, userId: string) {
   await db.delete(s.user).where(eq(s.user.id, userId));
 }
 
+// ── answer-key scan helper ────────────────────────────────────────────────────
+// Used by noAnswerKeyInGet check: deep-scans a serialized object for correctIndex/explanation.
+
+function hasAnswerKey(obj: unknown): boolean {
+  if (obj === null || typeof obj !== 'object') return false;
+  if (Array.isArray(obj)) return (obj as unknown[]).some(hasAnswerKey);
+  const record = obj as Record<string, unknown>;
+  if ('correctIndex' in record || 'explanation' in record) return true;
+  return Object.values(record).some(hasAnswerKey);
+}
+
 // ── per-case checks ───────────────────────────────────────────────────────────
 
 interface CaseChecks {
@@ -167,6 +179,10 @@ interface CaseChecks {
   validationPasses: boolean;
   winCheck2to4Items: boolean;
   allCitationsResolve: boolean;
+  hasFlashcards: boolean;
+  hasWorkedExample: boolean;
+  hasAnimatedDiagram: boolean;
+  noAnswerKeyInGet: boolean;
 }
 
 interface CaseResult {
@@ -191,6 +207,10 @@ async function runCase(db: Db, c: EvalCase): Promise<CaseResult> {
     validationPasses: false,
     winCheck2to4Items: false,
     allCitationsResolve: false,
+    hasFlashcards: false,
+    hasWorkedExample: false,
+    hasAnimatedDiagram: false,
+    noAnswerKeyInGet: false,
   };
 
   let userId: string | null = null;
@@ -239,6 +259,20 @@ async function runCase(db: Db, c: EvalCase): Promise<CaseResult> {
       checks.allCitationsResolve = content.blocks
         .filter((b) => b.type === 'article')
         .every((b) => b.type === 'article' && b.citationUrls.some((u) => known.has(u)));
+
+      // Check 6: fixture delivers a flashcard_deck block (Phase 4b new block)
+      checks.hasFlashcards = content.blocks.some((b) => b.type === 'flashcard_deck');
+
+      // Check 7: fixture delivers a worked_example block (Phase 4b new block)
+      checks.hasWorkedExample = content.blocks.some((b) => b.type === 'worked_example');
+
+      // Check 8: fixture delivers an animated_diagram block (Phase 4b new block)
+      checks.hasAnimatedDiagram = content.blocks.some((b) => b.type === 'animated_diagram');
+
+      // Check 9: GET serialization strips correctIndex + explanation (no answer key in wire shape)
+      // Simulate what the GET handler does — deep-clone and strip answer key fields.
+      const wireContent = stripContentAnswerKey(delivered.content);
+      checks.noAnswerKeyInGet = !hasAnswerKey(wireContent);
     }
   } catch (err) {
     console.error(`[${c.id}] exception:`, err);

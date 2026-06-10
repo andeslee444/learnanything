@@ -24,13 +24,12 @@ type Props = {
  * gates completion behind a graded quiz item (completionItem).
  *
  * Step testids: we-step-{i} (0-indexed).
- * Completion option testids: we-option-{i} (DISTINCT from quiz-option-{i} — see Task 5).
+ * Completion option testids: we-option-{i} (DISTINCT from quiz-option-{i}).
  *
- * Grading is done server-side via the attempts API; correctIndex in the payload
- * is NOT used for client-side highlighting. Highlight is driven by the response
- * (correct boolean). NOTE: In Phase 4b the GET still returns correctIndex — it
- * will be stripped in Task 4. Matching quiz-block.tsx's pattern, we highlight
- * only from the response.
+ * Grading is done server-side via the attempts API; correctIndex is NOT used
+ * for client-side highlighting. Highlight is driven by the response (correct
+ * boolean). GET strips correctIndex + explanation before serialization —
+ * matching quiz-block.tsx's pattern, we highlight only from the response.
  */
 export function WorkedExample({ lessonId, block, liveRef }: Props) {
   // revealedCount: how many steps are currently shown (0 = none; block.steps.length = all shown)
@@ -38,7 +37,7 @@ export function WorkedExample({ lessonId, block, liveRef }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<ItemResult | null>(null);
   // Track which option index was chosen so we can highlight it from the response.
-  // correctIndex is NOT used client-side (will be stripped from GET in Task 4).
+  // correctIndex is NOT used client-side — GET strips it before serialization.
   const [chosenIndex, setChosenIndex] = useState<number | null>(null);
   const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
@@ -146,7 +145,7 @@ export function WorkedExample({ lessonId, block, liveRef }: Props) {
               if (result !== null) {
                 if (i === chosenIndex) {
                   // Highlight the chosen option using the response: correct → sky, incorrect → red.
-                  // correctIndex is NOT used client-side (will be stripped from GET in Task 4).
+                  // correctIndex is NOT used client-side — GET strips it before serialization.
                   btnClass += result.correct
                     ? ' border-sky-400 bg-sky-100 text-sky-800 font-medium'
                     : ' border-red-300 bg-red-50 text-red-700 font-medium';
