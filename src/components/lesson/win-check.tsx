@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import type { QuizItem } from '@/server/lessons/blocks';
 
@@ -33,12 +33,18 @@ export function WinCheck({ lessonId, items, objective, trackId, liveRef }: Props
   const mountedRef = useRef(true);
   const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const setMounted = (node: HTMLDivElement | null) => {
+  // useCallback keeps the ref callback stable across re-renders. The callback
+  // sets mountedRef.current = true on mount and false on unmount (cleanup).
+  // React Strict Mode calls setMounted(null) then setMounted(node) in dev — we
+  // restore mountedRef.current on remount so the advance timer can fire.
+  const setMounted = useCallback((node: HTMLDivElement | null) => {
     if (!node) {
       mountedRef.current = false;
       if (advanceTimerRef.current) clearTimeout(advanceTimerRef.current);
+    } else {
+      mountedRef.current = true;
     }
-  };
+  }, []);
 
   async function handleAnswer(item: QuizItem, answerIndex: number) {
     if (state.phase !== 'answering') return;

@@ -32,10 +32,15 @@ export function QuizBlock({ lessonId, items, kind, label, onItemAnswered, onComp
   const mountedRef = useRef(true);
 
   // Cleanup on unmount
+  // useCallback keeps the ref callback stable. React Strict Mode calls
+  // setMounted(null) then setMounted(node) in dev — restore mountedRef.current
+  // on remount so the advance timer can fire.
   const setMounted = useCallback((node: HTMLDivElement | null) => {
     if (!node) {
       mountedRef.current = false;
       if (advanceTimerRef.current) clearTimeout(advanceTimerRef.current);
+    } else {
+      mountedRef.current = true;
     }
   }, []);
 
