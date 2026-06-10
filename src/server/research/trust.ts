@@ -45,7 +45,7 @@ export type VettedSource = SearchSource & { trusted: boolean; trustReason: strin
  * Normalize a URL to its canonical href form so trailing-slash/encoding variants
  * compare equal. Falls back to the raw string if URL parsing fails.
  */
-function safeHref(url: string): string {
+export function safeHref(url: string): string {
   try {
     return new URL(url).href;
   } catch {

@@ -9,7 +9,8 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "seed:trust": "tsx scripts/seed-trust-domains.ts"
+    "seed:trust": "tsx scripts/seed-trust-domains.ts",
+    "research:smoke": "tsx scripts/research-smoke.ts"
   },
   "dependencies": {
     "ai": "^6.0.199",

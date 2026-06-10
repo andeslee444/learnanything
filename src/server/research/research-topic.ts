@@ -6,7 +6,7 @@ import { findDossier, saveDossier, type DossierKey } from './dossier-cache';
 import { extractSource } from './extract';
 import { getResearchProvider, type ResearchProvider, type SearchSource } from './provider';
 import { synthesizeDossier } from './synthesize';
-import { getAllowlist, getBlocklist, normalizeDomain, vetSources } from './trust';
+import { getAllowlist, getBlocklist, normalizeDomain, safeHref, vetSources } from './trust';
 
 type Db = NodePgDatabase<typeof s>;
 
@@ -33,7 +33,7 @@ export async function researchTopic(
 
   const cached = await findDossier(db, key);
   if (cached) {
-    return { status: 'hit', dossierId: cached.id, claims: (cached.claims as unknown[]).length };
+    return { status: 'hit', dossierId: cached.id, claims: cached.claims.length };
   }
 
   const provider = deps.provider ?? (await getResearchProvider());
@@ -48,9 +48,9 @@ export async function researchTopic(
   if (trusted.length < MIN_VETTED_SOURCES) {
     const blocklist = await getBlocklist(db);
     const open = await provider.search({ query, excludeDomains: blocklist });
-    const alreadyHave = new Set(trusted.map((src) => src.url));
+    const alreadyHave = new Set(trusted.map((src) => safeHref(src.url)));
     const allowSet = new Set(allowlist);
-    const candidates = dedupeByUrl(open).filter((src) => !alreadyHave.has(src.url));
+    const candidates = dedupeByUrl(open).filter((src) => !alreadyHave.has(safeHref(src.url)));
     const preTrusted = candidates.filter((src) => allowSet.has(normalizeDomain(src.url)));
     const needVetting = candidates.filter((src) => !allowSet.has(normalizeDomain(src.url)));
     const vetted = (await vetSources(needVetting)).filter((v) => v.trusted);
@@ -66,17 +66,24 @@ export async function researchTopic(
   const extractions = [];
   for (const source of toExtract) {
     const extraction = await extractSource(source, key.topic);
-    const contentCheck = await moderateText(JSON.stringify(extraction.claims), 'retrieved_content');
+    const contentCheck = await moderateText(
+      JSON.stringify({ claims: extraction.claims, glossarySeeds: extraction.glossarySeeds, misconceptions: extraction.misconceptions }),
+      'retrieved_content'
+    );
     if (contentCheck.allowed) extractions.push(extraction);
   }
   if (extractions.length === 0) return { status: 'insufficient_sources', vettedSources: trusted.length };
 
-  const sources = toExtract.map((src) => ({ url: src.url, title: src.title, publishedDate: src.publishedDate }));
+  // Build sources from SURVIVING extractions only — dropped sources must not appear in citations.
+  const survivingUrls = new Set(extractions.map((e) => e.sourceUrl));
+  const sources = toExtract
+    .filter((src) => survivingUrls.has(src.url))
+    .map((src) => ({ url: src.url, title: src.title, publishedDate: src.publishedDate }));
   const content = await synthesizeDossier(key.topic, key.levelBand, extractions, sources);
   const dossierId = await saveDossier(db, key, content, MODEL_TIERS.generator);
   return { status: 'built', dossierId, claims: content.claims.length, vettedSources: trusted.length };
 }
 
 function dedupeByUrl<T extends { url: string }>(sources: T[]): T[] {
-  return [...new Map(sources.map((src) => [src.url, src])).values()];
+  return [...new Map(sources.map((src) => [safeHref(src.url), src])).values()];
 }
