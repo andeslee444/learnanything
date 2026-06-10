@@ -61,4 +61,26 @@ describe('lesson domain', () => {
     // Verify it's specifically the lesson_id unique constraint (one shared page per source lesson)
     expect(msg).toMatch(/shared_lessons_lesson_id_unique/i);
   });
+
+  it('enforces slug uniqueness across all shared lessons', async () => {
+    const [lesson3] = await testDb
+      .insert(s.lessons)
+      .values({ trackId, seq: 3, spec: { objective: 'nationalism' } })
+      .returning();
+    await testDb.insert(s.sharedLessons).values({
+      lessonId: lesson3.id, sanitizedContent: {}, slug: 'ww1-nationalism-xy99',
+    });
+    // Attempt to insert a shared_lesson for a DIFFERENT lesson but reusing the slug
+    const [lesson4] = await testDb
+      .insert(s.lessons)
+      .values({ trackId, seq: 4, spec: { objective: 'more nationalism' } })
+      .returning();
+    const err = await testDb.insert(s.sharedLessons).values({
+      lessonId: lesson4.id, sanitizedContent: {}, slug: 'ww1-nationalism-xy99',
+    }).catch((e: unknown) => e);
+    const msg = String(
+      err instanceof Error && err.cause instanceof Error ? err.cause.message : (err as Error).message
+    );
+    expect(msg).toMatch(/shared_lessons_slug_unique|duplicate key/i);
+  });
 });
