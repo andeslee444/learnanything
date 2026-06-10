@@ -50,6 +50,14 @@ function TrackBuildSetup({ trackId }: { trackId: string }) {
     };
   }, []);
 
+  // When quiz is fully completed (itemIndex past the last item), refresh to show the map.
+  useEffect(() => {
+    if (!quizState) return;
+    if (quizState.itemIndex >= quizState.quiz.items.length) {
+      router.refresh();
+    }
+  }, [quizState, router]);
+
   // mode='build': fire initialize on mount (guarded with useRef to prevent double-fire)
   useEffect(() => {
     if (firedRef.current) return;
@@ -168,9 +176,8 @@ function TrackBuildSetup({ trackId }: { trackId: string }) {
         if (!prev) return null;
         const next = prev.itemIndex + 1;
         if (next >= prev.quiz.items.length) {
-          // All items done — refresh to see the learning map
-          router.refresh();
-          return null;
+          // All items done — signal completion (router.refresh() called in useEffect below)
+          return { ...prev, itemIndex: next, answered: false, lastCorrect: null };
         }
         return { ...prev, itemIndex: next, answered: false, lastCorrect: null };
       });
@@ -219,6 +226,9 @@ function TrackBuildSetup({ trackId }: { trackId: string }) {
     const { quiz, itemIndex, answered, lastCorrect, submitting } = quizState;
     const item = quiz.items[itemIndex];
     const total = quiz.items.length;
+
+    // itemIndex past end means all items done; useEffect will call router.refresh()
+    if (!item) return null;
 
     return (
       <div className="mt-8 rounded-xl border border-sky-200 bg-sky-50 px-6 py-8">
