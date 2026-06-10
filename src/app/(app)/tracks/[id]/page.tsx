@@ -1,11 +1,14 @@
 import { headers } from 'next/headers';
 import { notFound, redirect } from 'next/navigation';
+import { desc, eq } from 'drizzle-orm';
 import { auth } from '@/lib/auth';
 import { db } from '@/lib/db';
+import * as s from '@/db/schema';
 import { getLearnerByUserId } from '@/server/learners';
 import { getTrackDetail } from '@/server/tracks';
 import { hasCalibration } from '@/server/track-init';
 import { TrackSetup } from './track-setup';
+import { LessonSection } from './lesson-section';
 
 type NodeMastery = 'not_started' | 'in_progress' | 'demonstrated' | 'mastered';
 
@@ -34,6 +37,28 @@ export default async function TrackDetailPage({ params }: { params: Promise<{ id
   const { track, mission, nodes } = detail;
 
   const calibrated = nodes.length > 0 ? await hasCalibration(db, id) : false;
+
+  // Fetch lessons for this track
+  const lessonRows = await db
+    .select({
+      id: s.lessons.id,
+      seq: s.lessons.seq,
+      status: s.lessons.status,
+      spec: s.lessons.spec,
+    })
+    .from(s.lessons)
+    .where(eq(s.lessons.trackId, id))
+    .orderBy(desc(s.lessons.seq));
+
+  const lessonCards = lessonRows.map((l) => ({
+    id: l.id,
+    seq: l.seq,
+    status: l.status,
+    objective:
+      l.spec && typeof l.spec === 'object' && 'objective' in (l.spec as Record<string, unknown>)
+        ? String((l.spec as Record<string, unknown>).objective)
+        : null,
+  }));
 
   // Group nodes by mastery
   const groups: Record<'not_started' | 'in_progress' | 'done', typeof nodes> = {
@@ -143,14 +168,12 @@ export default async function TrackDetailPage({ params }: { params: Promise<{ id
             <TrackSetup trackId={id} mode="calibrate" />
           )}
 
-          {/* Lesson stub */}
-          <div
-            className="mt-8 rounded-xl bg-sun-100 px-5 py-4 text-sun-700"
-            data-testid="lesson-stub"
-          >
-            <p className="font-medium">Your first lesson is coming soon</p>
-            <p className="mt-1 text-sm">Lesson generation arrives in the next phase — your learning map is ready for it.</p>
-          </div>
+          {/* Lesson section */}
+          <LessonSection
+            trackId={id}
+            lessons={lessonCards}
+            hasNodes={nodes.length > 0}
+          />
         </section>
       )}
     </main>

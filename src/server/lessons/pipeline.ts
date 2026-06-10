@@ -1,0 +1,207 @@
+import { and, desc, eq, sql } from 'drizzle-orm';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as s from '@/db/schema';
+import { MODEL_TIERS } from '@/lib/ai';
+import { captureHold, refundHold } from '@/lib/credits';
+import { moderateText } from '@/server/moderation';
+import { researchTopic } from '@/server/research/research-topic';
+import { db as appDb } from '@/lib/db';
+import { lessonPlanSchema, winCheckPassed, type LessonContent } from './blocks';
+import { buildOpenerItems, hydrateTrackState, pickFrontierNode, planLesson } from './planner';
+import { generateBlocks } from './generate';
+import { validateLessonContent } from './validate';
+
+type Db = NodePgDatabase<typeof s>;
+
+/** Same FOR UPDATE convention as learning_records / lessons seq backstopped by the unique index. */
+async function nextLessonSeq(tx: Parameters<Parameters<Db['transaction']>[0]>[0], trackId: string) {
+  await tx.execute(sql`SELECT id FROM tracks WHERE id = ${trackId} FOR UPDATE`);
+  const [row] = await tx
+    .select({ max: sql<number>`COALESCE(MAX(${s.lessons.seq}), 0)::int` })
+    .from(s.lessons)
+    .where(eq(s.lessons.trackId, trackId));
+  return row.max + 1;
+}
+
+export async function createLessonRow(db: Db, trackId: string) {
+  return db.transaction(async (tx) => {
+    const seq = await nextLessonSeq(tx, trackId);
+    const [lesson] = await tx
+      .insert(s.lessons)
+      .values({ trackId, seq, spec: {}, status: 'generating' })
+      .returning();
+    return lesson;
+  });
+}
+
+async function findHoldId(db: Db, lessonId: string): Promise<string | null> {
+  const [hold] = await db
+    .select({ id: s.creditLedger.id })
+    .from(s.creditLedger)
+    .where(and(eq(s.creditLedger.lessonId, lessonId), eq(s.creditLedger.entryType, 'hold')))
+    .orderBy(desc(s.creditLedger.createdAt))
+    .limit(1);
+  return hold?.id ?? null;
+}
+
+async function failLesson(db: Db, lessonId: string, reason: string) {
+  // C2: CAS — only transition from 'generating'; if someone else already terminal'd it, skip side-effects.
+  const rows = await db
+    .update(s.lessons)
+    .set({ status: 'failed', content: { failureReason: reason } })
+    .where(and(eq(s.lessons.id, lessonId), eq(s.lessons.status, 'generating')))
+    .returning({ id: s.lessons.id });
+  if (rows.length === 0) return { status: 'failed' as const, reason };
+  const holdId = await findHoldId(db, lessonId);
+  if (holdId) await refundHold(db, holdId).catch((err) => console.error('refund failed', err));
+  return { status: 'failed' as const, reason };
+}
+
+/**
+ * Safe public wrapper: marks the lesson failed and refunds.
+ * Call from route start-catch handlers — swallows errors so a secondary failure
+ * never masks the original error.
+ */
+export async function failLessonSafely(db: Db, lessonId: string, reason: string) {
+  try {
+    await failLesson(db, lessonId, reason);
+  } catch (err) {
+    console.error('failLessonSafely secondary error', err);
+  }
+}
+
+/** Stage 1 (spec §2 step 1): plan from track state. */
+export async function stagePlan(db: Db, lessonId: string) {
+  const [lesson] = await db.select().from(s.lessons).where(eq(s.lessons.id, lessonId));
+  if (!lesson || lesson.status !== 'generating') return { status: 'skipped' as const };
+  const state = await hydrateTrackState(db, lesson.trackId);
+  if (!state) return failLesson(db, lessonId, 'track state missing');
+  const node = pickFrontierNode(state);
+  if (!node) return failLesson(db, lessonId, 'no frontier skill to teach (map complete)');
+  const plan = await planLesson(state, node);
+  await db
+    .update(s.lessons)
+    .set({
+      spec: plan,
+      zpdSnapshot: { nodeId: node.id, nodeName: node.name, expertiseBand: state.track.expertiseBand },
+      modelVersion: MODEL_TIERS.planner,
+    })
+    .where(eq(s.lessons.id, lessonId));
+  return { status: 'planned' as const };
+}
+
+/** Stage 2 (spec §2 step 2): dossier via the Phase 3 research layer. */
+export async function stageResearch(db: Db, lessonId: string) {
+  const [lesson] = await db.select().from(s.lessons).where(eq(s.lessons.id, lessonId));
+  if (!lesson || lesson.status !== 'generating') return { status: 'skipped' as const };
+  const [track] = await db.select().from(s.tracks).where(eq(s.tracks.id, lesson.trackId));
+  const snapshot = lesson.zpdSnapshot as { nodeName?: string };
+  const topic = `${track.topic}: ${snapshot.nodeName ?? track.topic}`;
+  const result = await researchTopic(db, { vertical: track.vertical, topic, levelBand: track.expertiseBand });
+  if (result.status === 'insufficient_sources') {
+    return failLesson(db, lessonId, 'not enough trustworthy sources for this topic yet');
+  }
+  if (result.status === 'blocked') {
+    return failLesson(db, lessonId, result.retryable ? 'research temporarily unavailable — try again' : 'topic declined');
+  }
+  await db
+    .update(s.lessons)
+    .set({
+      zpdSnapshot: { ...(lesson.zpdSnapshot as Record<string, unknown>), dossierId: result.dossierId },
+    })
+    .where(eq(s.lessons.id, lessonId));
+  return { status: 'researched' as const };
+}
+
+/** Stage 3 (spec §2 steps 3-5): generate, validate, moderate, deliver, capture. */
+export async function stageGenerate(db: Db, lessonId: string) {
+  const [lesson] = await db.select().from(s.lessons).where(eq(s.lessons.id, lessonId));
+  if (!lesson || lesson.status !== 'generating') return { status: 'skipped' as const };
+  const [track] = await db.select().from(s.tracks).where(eq(s.tracks.id, lesson.trackId));
+  const snapshot = lesson.zpdSnapshot as { dossierId?: string };
+  if (!snapshot?.dossierId) return failLesson(db, lessonId, 'dossier reference missing');
+  const [dossier] = await db.select().from(s.topicDossiers).where(eq(s.topicDossiers.id, snapshot.dossierId));
+  if (!dossier) return failLesson(db, lessonId, 'dossier missing');
+
+  // IMPLEMENTER NOTE 1: parse lesson.spec with lessonPlanSchema; fail the lesson on parse error.
+  const specParse = lessonPlanSchema.safeParse(lesson.spec);
+  if (!specParse.success) {
+    return failLesson(db, lessonId, `lesson spec invalid: ${specParse.error.issues.map((i) => i.message).join('; ')}`);
+  }
+  const plan = specParse.data;
+
+  const dossierInput = {
+    sources: dossier.sources,
+    claims: dossier.claims,
+    misconceptions: dossier.misconceptions,
+  };
+  const levelBand = track.expertiseBand as 'novice' | 'developing' | 'competent';
+
+  const generated = await generateBlocks(plan, dossierInput, levelBand);
+  const check = validateLessonContent({ content: generated, dossierSourceUrls: dossier.sources.map((src) => src.url) });
+  if (!check.ok) {
+    // IMPLEMENTER NOTE 2: thread validator errors into the retry via generateBlocks' correction parameter.
+    const correction = check.errors.join('; ');
+    const retry = await generateBlocks(plan, dossierInput, levelBand, correction);
+    const recheck = validateLessonContent({ content: retry, dossierSourceUrls: dossier.sources.map((src) => src.url) });
+    if (!recheck.ok) return failLesson(db, lessonId, `lesson failed validation: ${recheck.errors.join('; ')}`);
+    return deliver(db, lessonId, retry, dossier.sources);
+  }
+  return deliver(db, lessonId, generated, dossier.sources);
+}
+
+async function deliver(
+  db: Db,
+  lessonId: string,
+  content: Omit<LessonContent, 'openerItems'>,
+  sources: Array<{ url: string }>,
+) {
+  const [lesson] = await db.select().from(s.lessons).where(eq(s.lessons.id, lessonId));
+  const state = await hydrateTrackState(db, lesson.trackId);
+  const openerItems = buildOpenerItems(state?.glossary ?? []);
+  const moderation = await moderateText(JSON.stringify(content), 'assembled_lesson');
+  if (!moderation.allowed) {
+    return failLesson(
+      db,
+      lessonId,
+      moderation.errored ? 'safety check unavailable — try again' : 'lesson failed the safety check',
+    );
+  }
+  // C2: CAS — only transition from 'generating'; if someone else already terminal'd it, skip capture.
+  const rows = await db
+    .update(s.lessons)
+    .set({
+      content: { ...content, openerItems },
+      status: 'ready',
+      citations: sources.map((src) => ({ url: src.url })),
+      modelVersion: MODEL_TIERS.generator,
+    })
+    .where(and(eq(s.lessons.id, lessonId), eq(s.lessons.status, 'generating')))
+    .returning({ id: s.lessons.id });
+  if (rows.length === 0) return { status: 'skipped' as const };
+  const holdId = await findHoldId(db, lessonId);
+  if (holdId) await captureHold(db, holdId).catch((err) => console.error('capture failed', err));
+  return { status: 'ready' as const };
+}
+
+/** Entry point the workflow steps call (each stage by id — serializable args only). */
+export async function runLessonStage(stage: 'plan' | 'research' | 'generate' | 'fail', lessonId: string, message?: string) {
+  if (stage === 'plan') return stagePlan(appDb, lessonId);
+  if (stage === 'research') return stageResearch(appDb, lessonId);
+  if (stage === 'fail') return failLesson(appDb, lessonId, message ?? 'generation error — try again');
+  return stageGenerate(appDb, lessonId);
+}
+
+/** Minimal mastery update on win-check pass — Phase 5 replaces this with evidence-gated learning records. */
+export async function recordWinCheckResult(db: Db, lessonId: string, correct: number, total: number) {
+  if (!winCheckPassed(correct, total)) return { passed: false };
+  const [lesson] = await db.select().from(s.lessons).where(eq(s.lessons.id, lessonId));
+  const snapshot = lesson?.zpdSnapshot as { nodeId?: string };
+  if (snapshot?.nodeId) {
+    await db
+      .update(s.skillNodes)
+      .set({ mastery: 'demonstrated' })
+      .where(and(eq(s.skillNodes.id, snapshot.nodeId), eq(s.skillNodes.trackId, lesson.trackId)));
+  }
+  return { passed: true };
+}

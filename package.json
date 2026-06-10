@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "seed:trust": "tsx scripts/seed-trust-domains.ts",
-    "research:smoke": "tsx scripts/research-smoke.ts"
+    "research:smoke": "tsx scripts/research-smoke.ts",
+    "evals": "tsx evals/run-evals.ts"
   },
   "dependencies": {
     "ai": "^6.0.199",
@@ -19,7 +20,9 @@
     "next": "16.2.9",
     "pg": "^8.21.0",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "streamdown": "^2.5.0",
+    "workflow": "^4.3.1"
   },
   "devDependencies": {
     "@emnapi/core": "^1.11.0",

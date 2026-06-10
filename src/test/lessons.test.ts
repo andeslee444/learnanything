@@ -29,9 +29,9 @@ describe('lesson domain', () => {
   it('stores a lesson and its attempt events', async () => {
     const [lesson] = await testDb
       .insert(s.lessons)
-      .values({ trackId, seq: 1, spec: { objective: 'Explain the alliance system' } })
+      .values({ trackId, seq: 1, spec: { objective: 'Explain the alliance system' }, status: 'ready' })
       .returning();
-    expect(lesson.status).toBe('generating');
+    expect(lesson.status).toBe('ready');
     expect(lesson.verificationStatus).toBe('pending');
 
     const [event] = await testDb
@@ -44,7 +44,7 @@ describe('lesson domain', () => {
   it('enforces unique slugs and one shared page per lesson', async () => {
     const [lesson] = await testDb
       .insert(s.lessons)
-      .values({ trackId, seq: 2, spec: { objective: 'x' } })
+      .values({ trackId, seq: 2, spec: { objective: 'x' }, status: 'ready' })
       .returning();
     await testDb.insert(s.sharedLessons).values({
       lessonId: lesson.id, sanitizedContent: {}, slug: 'ww1-alliances-ab12',
@@ -65,7 +65,7 @@ describe('lesson domain', () => {
   it('enforces slug uniqueness across all shared lessons', async () => {
     const [lesson3] = await testDb
       .insert(s.lessons)
-      .values({ trackId, seq: 3, spec: { objective: 'nationalism' } })
+      .values({ trackId, seq: 3, spec: { objective: 'nationalism' }, status: 'ready' })
       .returning();
     await testDb.insert(s.sharedLessons).values({
       lessonId: lesson3.id, sanitizedContent: {}, slug: 'ww1-nationalism-xy99',
@@ -73,7 +73,7 @@ describe('lesson domain', () => {
     // Attempt to insert a shared_lesson for a DIFFERENT lesson but reusing the slug
     const [lesson4] = await testDb
       .insert(s.lessons)
-      .values({ trackId, seq: 4, spec: { objective: 'more nationalism' } })
+      .values({ trackId, seq: 4, spec: { objective: 'more nationalism' }, status: 'ready' })
       .returning();
     const err = await testDb.insert(s.sharedLessons).values({
       lessonId: lesson4.id, sanitizedContent: {}, slug: 'ww1-nationalism-xy99',

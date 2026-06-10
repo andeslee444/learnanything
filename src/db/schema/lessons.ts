@@ -1,4 +1,5 @@
 import { pgTable, text, timestamp, jsonb, integer, real, boolean, uuid, pgEnum, uniqueIndex, index } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { tracks, learners } from './learners';
 
 export const lessonStatus = pgEnum('lesson_status', ['generating', 'queued', 'ready', 'failed', 'needs_review']);
@@ -28,6 +29,7 @@ export const lessons = pgTable(
   (t) => [
     uniqueIndex('lessons_track_seq').on(t.trackId, t.seq),
     index('lessons_track_status').on(t.trackId, t.status),
+    uniqueIndex('lessons_one_generating_per_track').on(t.trackId).where(sql`${t.status} = 'generating'`),
   ]
 );
 
