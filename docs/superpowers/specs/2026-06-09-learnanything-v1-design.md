@@ -146,6 +146,8 @@ Resend email v1: due-review digest (daily max 1), weekly mission report (evidenc
 
 Light-first. Sky-gradient hero moments, generous whitespace, soft cloud motifs; warm sun accent for wins/mastery. Two-weight type, large readable body. Motion: lesson blocks float in unhurriedly; everything honors reduced-motion. The Library prints beautifully (print CSS is a feature, not an afterthought). Dark mode: post-v1.
 
+Phase-1 implementation notes for Phase 4: (a) globals.css applies a hard CSS reduced-motion override (`* { animation/transition-duration: 0.01ms !important }`) — Motion-driven animations must additionally use `useReducedMotion()` in JS and never rely on CSS transitions; test blocks with reduced-motion enabled. (b) The sun accent at small sizes (sun-700 on sun-100, 14px) is 3.12:1 — large-text only; don't use the sun palette for small body text.
+
 ## 12. Build roadmap (one plan→execute cycle per phase, not one plan)
 
 This is a roadmap of plan cycles, not a single implementation plan. Safety baselines, metering, and evals are threaded through the phases that need them — not bolted on at the end. **First usable milestone = end of Phase 5** (a learner can onboard, take lessons, review, and build a Library); everything after is launch hardening.
