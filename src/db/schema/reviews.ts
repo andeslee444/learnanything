@@ -1,4 +1,4 @@
-import { pgTable, timestamp, integer, real, smallint, uuid, text, check, index } from 'drizzle-orm/pg-core';
+import { pgTable, timestamp, integer, real, smallint, uuid, text, check, index, uniqueIndex } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { learners } from './learners';
 import { glossaryTerms, learningRecords } from './records';
@@ -43,17 +43,25 @@ export const reviewLog = pgTable('review_log', {
   difficulty: real('difficulty').notNull(),
   elapsedDays: integer('elapsed_days').notNull(),
   scheduledDays: integer('scheduled_days').notNull(),
+  lastElapsedDays: integer('last_elapsed_days').notNull().default(0), // days since the PREVIOUS review — required by the FSRS optimizer (FSRSHistory)
+  learningSteps: integer('learning_steps').notNull().default(0),
   reviewedAt: timestamp('reviewed_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 // ── Reserved for v1.x (spec §4: "schema reserved, not active in v1") ──────────
-export const conceptAbility = pgTable('concept_ability', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  learnerId: uuid('learner_id').notNull().references(() => learners.id, { onDelete: 'cascade' }),
-  conceptKey: text('concept_key').notNull(), // skill-node name or glossary term key
-  rating: real('rating').notNull().default(0),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const conceptAbility = pgTable(
+  'concept_ability',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    learnerId: uuid('learner_id').notNull().references(() => learners.id, { onDelete: 'cascade' }),
+    conceptKey: text('concept_key').notNull(), // skill-node name or glossary term key
+    rating: real('rating').notNull().default(0),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('concept_ability_learner_concept').on(t.learnerId, t.conceptKey),
+  ]
+);
 
 export const itemDifficulty = pgTable('item_difficulty', {
   id: uuid('id').primaryKey().defaultRandom(),
