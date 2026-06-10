@@ -6,11 +6,10 @@ import Link from 'next/link';
 import { authClient } from '@/lib/auth-client';
 import { ageBandFromBirthYear, type AgeBand } from '@/lib/age-band';
 
-const THIS_YEAR = new Date().getUTCFullYear();
-const YEARS = Array.from({ length: 100 }, (_, i) => THIS_YEAR - i);
-
 export default function SignupPage() {
   const router = useRouter();
+  const thisYear = new Date().getUTCFullYear();
+  const years = Array.from({ length: 100 }, (_, i) => thisYear - i);
   // Neutral age screen (spec §6): plain question, no hint of a threshold.
   const [birthYear, setBirthYear] = useState<number | null>(null);
   const [band, setBand] = useState<AgeBand | null>(null);
@@ -51,7 +50,7 @@ export default function SignupPage() {
     if (!hasExistingUser) {
       const { error: signUpError } = await authClient.signUp.email({ name, email, password });
       if (signUpError) {
-        setError(signUpError.message ?? 'Sign up failed.');
+        setError("We couldn't create your account. If you already have one, try logging in.");
         setBusy(false);
         return;
       }
@@ -63,10 +62,11 @@ export default function SignupPage() {
       body: JSON.stringify({ displayName: hasExistingUser ? (sessionResult?.data?.user?.name ?? name) : name, ageBand: band }),
     });
     if (!res.ok) {
-      setError('Account created but profile setup failed — please log in to retry.');
+      setError('Profile setup failed — please refresh and try again.');
       setBusy(false);
       return;
     }
+    setBusy(false);
     router.push('/tracks');
   }
 
@@ -96,10 +96,11 @@ export default function SignupPage() {
               className="mt-6 w-full rounded-md border border-ink-400/40 bg-white p-3 text-ink-900"
               value={birthYear ?? ''}
               onChange={(e) => setBirthYear(Number(e.target.value))}
+              aria-label="Birth year"
               required
             >
               <option value="" disabled>Birth year</option>
-              {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+              {years.map((y) => <option key={y} value={y}>{y}</option>)}
             </select>
             <button type="submit" className="mt-6 w-full rounded-md bg-sky-600 p-3 font-medium text-white">
               Continue
@@ -109,11 +110,11 @@ export default function SignupPage() {
           <form onSubmit={submitAccount}>
             <h1 className="text-2xl font-medium text-ink-900">Create your account</h1>
             <input className="mt-6 w-full rounded-md border border-ink-400/40 bg-white p-3" placeholder="Your name"
-              value={name} onChange={(e) => setName(e.target.value)} required maxLength={80} />
+              value={name} onChange={(e) => setName(e.target.value)} aria-label="Your name" autoComplete="name" required maxLength={80} />
             <input className="mt-3 w-full rounded-md border border-ink-400/40 bg-white p-3" type="email" placeholder="Email"
-              value={email} onChange={(e) => setEmail(e.target.value)} required />
+              value={email} onChange={(e) => setEmail(e.target.value)} aria-label="Email" autoComplete="email" required />
             <input className="mt-3 w-full rounded-md border border-ink-400/40 bg-white p-3" type="password" placeholder="Password (8+ characters)"
-              value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} />
+              value={password} onChange={(e) => setPassword(e.target.value)} aria-label="Password" autoComplete="new-password" required minLength={8} />
             {band !== '18_plus' && (
               <label className="mt-4 flex items-start gap-2 text-sm text-ink-600">
                 <input type="checkbox" checked={attested} onChange={(e) => setAttested(e.target.checked)} className="mt-1" />

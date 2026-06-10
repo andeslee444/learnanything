@@ -22,6 +22,7 @@ export default function LoginPage() {
       setBusy(false);
       return;
     }
+    setBusy(false);
     router.push('/tracks');
   }
 
@@ -30,9 +31,9 @@ export default function LoginPage() {
       <form onSubmit={submit} className="w-full max-w-md rounded-xl bg-cloud p-8 shadow-sm">
         <h1 className="text-2xl font-medium text-ink-900">Welcome back</h1>
         <input className="mt-6 w-full rounded-md border border-ink-400/40 bg-white p-3" type="email" placeholder="Email"
-          value={email} onChange={(e) => setEmail(e.target.value)} required />
+          value={email} onChange={(e) => setEmail(e.target.value)} aria-label="Email" autoComplete="email" required />
         <input className="mt-3 w-full rounded-md border border-ink-400/40 bg-white p-3" type="password" placeholder="Password"
-          value={password} onChange={(e) => setPassword(e.target.value)} required />
+          value={password} onChange={(e) => setPassword(e.target.value)} aria-label="Password" autoComplete="current-password" required />
         {error && <p className="mt-3 text-sm text-red-600" role="alert">{error}</p>}
         <button type="submit" disabled={busy} className="mt-6 w-full rounded-md bg-sky-600 p-3 font-medium text-white disabled:opacity-50">
           {busy ? 'Logging in…' : 'Log in'}
