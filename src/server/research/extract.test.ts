@@ -44,14 +44,16 @@ describe('extractSource', () => {
 // ── synthesizeDossier citation guard ─────────────────────────────────────────
 
 describe('synthesizeDossier citation guard', () => {
-  // The 'synthesize-dossier' fixture returns three claims:
+  // The 'synthesize-dossier' fixture returns four claims:
   //   Claim A: sourceUrls: ['https://docs.python.org/3/tutorial/index.html']
   //   Claim B: sourceUrls: ['https://docs.python.org/3/tutorial/index.html', 'https://developer.mozilla.org/...']
   //   Claim C: sourceUrls: ['https://realpython.com/command-line-interfaces-python-argparse/']
+  //   Claim D: sourceUrls: ['https://developer.mozilla.org/en-US/docs/Learn/JavaScript/First_steps']
   //
   // By passing sources containing ONLY the MDN url, we exercise both behaviors:
   //   - Claims A and C are dropped entirely (their urls are not in sources)
   //   - Claim B keeps a subset of its sourceUrls (MDN survives; python.org is filtered out)
+  //   - Claim D survives as-is (MDN is the only source and it is known)
 
   const MDN_URL = 'https://developer.mozilla.org/en-US/docs/Learn/JavaScript/First_steps';
   const PYTHON_URL = 'https://docs.python.org/3/tutorial/index.html';
@@ -81,6 +83,11 @@ describe('synthesizeDossier citation guard', () => {
     // Claim C ('Command-line tools parse arguments...') → only realpython.com → DROPPED
     const claimC = result.claims.find((c) => c.claim === 'Command-line tools parse arguments and exit nonzero on errors.');
     expect(claimC).toBeUndefined();
+
+    // Claim D ('Loops repeat work...') → only MDN → SURVIVES
+    const claimD = result.claims.find((c) => c.claim === 'Loops repeat work without copy-pasting code.');
+    expect(claimD).toBeDefined();
+    expect(claimD!.sourceUrls).toEqual([MDN_URL]);
   });
 
   it('keeps claims whose sourceUrls are all known', async () => {
@@ -105,6 +112,11 @@ describe('synthesizeDossier citation guard', () => {
     const claimC = result.claims.find((c) => c.claim === 'Command-line tools parse arguments and exit nonzero on errors.');
     expect(claimC).toBeDefined();
     expect(claimC!.sourceUrls).toEqual([REALPYTHON_URL]);
+
+    // Claim D survives with its MDN url intact.
+    const claimD = result.claims.find((c) => c.claim === 'Loops repeat work without copy-pasting code.');
+    expect(claimD).toBeDefined();
+    expect(claimD!.sourceUrls).toEqual([MDN_URL]);
   });
 
   it('passes sources through to the result', async () => {

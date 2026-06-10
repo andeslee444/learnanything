@@ -18,8 +18,8 @@ export interface ResearchProvider {
 }
 
 export class ResearchProviderError extends Error {
-  constructor(message: string, readonly status?: number) {
-    super(message);
+  constructor(message: string, readonly status?: number, options?: { cause?: unknown }) {
+    super(message, options as ErrorOptions);
     this.name = 'ResearchProviderError';
   }
 }

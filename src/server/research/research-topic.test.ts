@@ -50,14 +50,24 @@ describe('researchTopic — cold build', () => {
 
     expect(result.status).toBe('built');
     if (result.status !== 'built') throw new Error('expected built');
-    expect(result.claims).toBeGreaterThan(0);
+    expect(result.claims).toBeGreaterThanOrEqual(3);
     expect(result.vettedSources).toBeGreaterThanOrEqual(3);
     expect(result.dossierId).toBeTruthy();
 
     // Dossier row was persisted.
     const rows = await testDb.select().from(s.topicDossiers).where(eq(s.topicDossiers.id, result.dossierId));
     expect(rows).toHaveLength(1);
-    expect((rows[0].claims as unknown[]).length).toBeGreaterThan(0);
+    const persistedClaims = rows[0].claims as Array<{ claim: string; sourceUrls: string[] }>;
+    expect(persistedClaims.length).toBeGreaterThanOrEqual(3);
+
+    // Every persisted claim's sourceUrls must be a subset of the persisted source urls.
+    const persistedSources = rows[0].sources as Array<{ url: string }>;
+    const persistedSourceUrlSet = new Set(persistedSources.map((s) => s.url));
+    for (const c of persistedClaims) {
+      for (const u of c.sourceUrls) {
+        expect(persistedSourceUrlSet.has(u)).toBe(true);
+      }
+    }
 
     // First (and only) provider call carried includeDomains containing the seeded domains.
     expect(provider.calls).toHaveLength(1);
@@ -165,8 +175,15 @@ describe('researchTopic — blocked topic', () => {
 });
 
 // ── Test 6: Dropped-source citability ─────────────────────────────────────────
-// When moderation blocks the retrieved_content check for one source's extraction,
+// When moderation blocks the retrieved_content check for docs.python.org (the first source),
 // that source must NOT appear in the persisted dossier's sources array.
+//
+// Fixture has 4 claims:
+//   A (python.org only) → dropped by citation guard (python.org not in surviving sources)
+//   B (python.org + MDN) → MDN survives → kept with [MDN]
+//   C (realpython only) → kept
+//   D (MDN only) → kept
+// Result: 3 claims survive → meets the dossier floor → dossier IS persisted.
 
 describe('researchTopic — dropped-source citability', () => {
   beforeAll(async () => {
@@ -175,7 +192,7 @@ describe('researchTopic — dropped-source citability', () => {
     await seedAllowlist('programming', ['docs.python.org', 'developer.mozilla.org', 'realpython.com']);
   });
 
-  it('excludes a moderation-dropped source from dossier sources', async () => {
+  it('excludes a moderation-dropped source from dossier sources and persists with ≥3 claims', async () => {
     const modModule = await import('@/server/moderation');
     let contentCallCount = 0;
     const spy = vi.spyOn(modModule, 'moderateText').mockImplementation(
@@ -194,19 +211,31 @@ describe('researchTopic — dropped-source citability', () => {
       const key = { vertical: 'programming', topic: 'python variables dropped source', levelBand: 'novice' as const };
       const result = await researchTopic(testDb, key, { provider });
 
-      // Should still build (2 remaining sources pass moderation).
+      // 3 claims survive the citation guard → meets floor → dossier IS persisted.
       expect(result.status).toBe('built');
       if (result.status !== 'built') throw new Error('expected built');
+      expect(result.claims).toBeGreaterThanOrEqual(3);
 
-      // The dropped source (docs.python.org, first FAKE_SOURCE) must not appear in dossier sources.
+      // The dropped source (docs.python.org) must NOT appear in dossier sources.
       const rows = await testDb.select().from(s.topicDossiers).where(eq(s.topicDossiers.id, result.dossierId));
       expect(rows).toHaveLength(1);
       const dossierSources = rows[0].sources as Array<{ url: string }>;
       const sourceUrls = dossierSources.map((src) => src.url);
       expect(sourceUrls).not.toContain('https://docs.python.org/3/tutorial/index.html');
+
       // The two surviving sources are present.
       expect(sourceUrls).toContain('https://developer.mozilla.org/en-US/docs/Learn/JavaScript/First_steps');
       expect(sourceUrls).toContain('https://realpython.com/command-line-interfaces-python-argparse/');
+
+      // Every persisted claim's sourceUrls must be a subset of the persisted source urls.
+      const persistedSourceUrlSet = new Set(sourceUrls);
+      const persistedClaims = rows[0].claims as Array<{ claim: string; sourceUrls: string[] }>;
+      expect(persistedClaims.length).toBeGreaterThanOrEqual(3);
+      for (const c of persistedClaims) {
+        for (const u of c.sourceUrls) {
+          expect(persistedSourceUrlSet.has(u)).toBe(true);
+        }
+      }
     } finally {
       spy.mockRestore();
     }

@@ -64,15 +64,21 @@ export async function researchTopic(
   // Quarantined extraction per source (content moderation rides on the extraction output).
   const toExtract = trusted.slice(0, MAX_SOURCES_TO_EXTRACT);
   const extractions = [];
+  let anyContentCheckErrored = false;
   for (const source of toExtract) {
     const extraction = await extractSource(source, key.topic);
     const contentCheck = await moderateText(
       JSON.stringify({ claims: extraction.claims, glossarySeeds: extraction.glossarySeeds, misconceptions: extraction.misconceptions }),
       'retrieved_content'
     );
+    if (contentCheck.errored) anyContentCheckErrored = true;
     if (contentCheck.allowed) extractions.push(extraction);
   }
-  if (extractions.length === 0) return { status: 'insufficient_sources', vettedSources: trusted.length };
+  if (extractions.length === 0) {
+    // Moderation outage (all checks errored) is retryable; genuine flagging is not.
+    if (anyContentCheckErrored) return { status: 'blocked', retryable: true };
+    return { status: 'insufficient_sources', vettedSources: trusted.length };
+  }
 
   // Build sources from SURVIVING extractions only — dropped sources must not appear in citations.
   const survivingUrls = new Set(extractions.map((e) => e.sourceUrl));
@@ -80,6 +86,13 @@ export async function researchTopic(
     .filter((src) => survivingUrls.has(src.url))
     .map((src) => ({ url: src.url, title: src.title, publishedDate: src.publishedDate }));
   const content = await synthesizeDossier(key.topic, key.levelBand, extractions, sources);
+
+  // Degenerate-dossier floor: if the citation guard left fewer than 3 claims, the dossier
+  // is too thin to be useful — report insufficient_sources without persisting.
+  if (content.claims.length < 3) {
+    return { status: 'insufficient_sources', vettedSources: trusted.length };
+  }
+
   const dossierId = await saveDossier(db, key, content, MODEL_TIERS.generator);
   return { status: 'built', dossierId, claims: content.claims.length, vettedSources: trusted.length };
 }

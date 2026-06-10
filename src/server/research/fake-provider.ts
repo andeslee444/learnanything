@@ -1,4 +1,5 @@
 import type { ResearchProvider, SearchOptions, SearchSource } from './provider';
+import { normalizeDomain } from './trust';
 
 /** Default fixture sources sit on allowlisted domains so the happy path is pre-trusted. */
 export const FAKE_SOURCES: SearchSource[] = [
@@ -32,7 +33,7 @@ export class FakeProvider implements ResearchProvider {
     const include = opts.includeDomains;
     const exclude = new Set(opts.excludeDomains ?? []);
     return this.sources.filter((s) => {
-      const domain = new URL(s.url).hostname.replace(/^www\./, '');
+      const domain = normalizeDomain(s.url);
       if (exclude.has(domain)) return false;
       if (include && include.length > 0) return include.includes(domain);
       return true;
