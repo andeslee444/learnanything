@@ -19,6 +19,7 @@ export const createTrackInput = z.object({
     notes: z.string().max(500).optional(),
   }),
   priorKnowledge: z.string().max(2000).optional(),
+  // min(2): single-character scope tokens cause substring false-positives in the graph validator (review-approved deviation from the plan's min(1)).
   outOfScope: z.array(z.string().min(2).max(100)).max(10),
 });
 export type CreateTrackInput = z.infer<typeof createTrackInput>;
