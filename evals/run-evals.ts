@@ -21,7 +21,8 @@
 import 'dotenv/config';
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { writeFileSync } from 'fs';
+import { eq } from 'drizzle-orm';
+import { writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import * as s from '../src/db/schema/index.js';
@@ -46,6 +47,9 @@ if (isLive && !isYes) {
 // Enforce fake mode unless --live is explicitly requested + confirmed.
 if (!isLive) {
   process.env.AI_FAKE_LLM = '1';
+} else {
+  // In live mode, delete AI_FAKE_LLM to prevent an exported shell var from silently serving fixtures.
+  delete process.env.AI_FAKE_LLM;
 }
 
 // ── cases ─────────────────────────────────────────────────────────────────────
@@ -57,19 +61,25 @@ interface EvalCase {
   levelBand: 'novice' | 'developing' | 'competent';
 }
 
-// Inline the 10 seed cases (mirrors evals/cases.json).
-const CASES: EvalCase[] = [
-  { id: 'prog-novice-vars',    vertical: 'programming', topic: 'Python variables for beginners',        levelBand: 'novice'     },
-  { id: 'prog-novice-loops',   vertical: 'programming', topic: 'Loops in Python',                      levelBand: 'novice'     },
-  { id: 'prog-dev-functions',  vertical: 'programming', topic: 'Writing reusable functions',            levelBand: 'developing' },
-  { id: 'prog-dev-errors',     vertical: 'programming', topic: 'Handling errors gracefully',            levelBand: 'developing' },
-  { id: 'prog-comp-cli',       vertical: 'programming', topic: 'Building a command-line tool',          levelBand: 'competent'  },
-  { id: 'hist-novice-ww1',     vertical: 'history',     topic: 'Causes of World War One',               levelBand: 'novice'     },
-  { id: 'hist-novice-rome',    vertical: 'history',     topic: 'Daily life in ancient Rome',            levelBand: 'novice'     },
-  { id: 'hist-dev-printing',   vertical: 'history',     topic: 'How the printing press changed Europe', levelBand: 'developing' },
-  { id: 'hist-dev-silkroad',   vertical: 'history',     topic: 'Trade along the Silk Road',             levelBand: 'developing' },
-  { id: 'hist-comp-sources',   vertical: 'history',     topic: 'Evaluating primary sources',            levelBand: 'competent'  },
-];
+function loadCases(): EvalCase[] {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = dirname(__filename);
+  const casesPath = join(__dirname, 'cases.json');
+  const raw = readFileSync(casesPath, 'utf8');
+  const parsed = JSON.parse(raw);
+
+  // Minimal shape check: ensure it's an array and each item has required fields.
+  if (!Array.isArray(parsed)) {
+    throw new Error('cases.json must be an array');
+  }
+  for (const item of parsed) {
+    if (!item.id || !item.vertical || !item.topic || !item.levelBand) {
+      throw new Error(`Invalid case item (missing required field): ${JSON.stringify(item)}`);
+    }
+  }
+
+  return parsed as EvalCase[];
+}
 
 // ── trust-domain seeds ────────────────────────────────────────────────────────
 // Minimal allowlist: fixture pipeline uses sources from these domains (matching
@@ -96,55 +106,57 @@ async function ensureAllowlist(db: ReturnType<typeof drizzle>) {
 type Db = ReturnType<typeof drizzle<typeof s>>;
 
 async function buildFixture(db: Db, c: EvalCase) {
-  // user
-  const userId = crypto.randomUUID();
-  const [user] = await db.insert(s.user)
-    .values({ id: userId, name: `eval-${c.id}`, email: `eval-${c.id}@eval.internal` })
-    .returning();
+  return await db.transaction(async (tx) => {
+    // user
+    const userId = crypto.randomUUID();
+    const [user] = await tx.insert(s.user)
+      .values({ id: userId, name: `eval-${c.id}`, email: `eval-${c.id}@eval.internal` })
+      .returning();
 
-  // learner
-  const [learner] = await db.insert(s.learners)
-    .values({ userId: user.id, displayName: `eval-${c.id}`, ageBand: '18_plus' })
-    .returning();
+    // learner
+    const [learner] = await tx.insert(s.learners)
+      .values({ userId: user.id, displayName: `eval-${c.id}`, ageBand: '18_plus' })
+      .returning();
 
-  // track
-  const [track] = await db.insert(s.tracks)
-    .values({ learnerId: learner.id, topic: c.topic, vertical: c.vertical, expertiseBand: c.levelBand })
-    .returning();
+    // track
+    const [track] = await tx.insert(s.tracks)
+      .values({ learnerId: learner.id, topic: c.topic, vertical: c.vertical, expertiseBand: c.levelBand })
+      .returning();
 
-  // mission (required by hydrateTrackState)
-  await db.insert(s.missions).values({
-    trackId: track.id,
-    whyText: `Eval fixture for ${c.topic}`,
-    successCriteria: [{ description: 'pass the eval' }],
-    constraints: {},
-    outOfScope: [],
+    // mission (required by hydrateTrackState)
+    await tx.insert(s.missions).values({
+      trackId: track.id,
+      whyText: `Eval fixture for ${c.topic}`,
+      successCriteria: [{ description: 'pass the eval' }],
+      constraints: {},
+      outOfScope: [],
+    });
+
+    // skill node (frontier must be non-empty for stagePlan to succeed)
+    const [node] = await tx.insert(s.skillNodes)
+      .values({ trackId: track.id, name: c.topic, summary: `Foundational skill: ${c.topic}`, missionRelevance: 0.9 })
+      .returning();
+
+    // learning record (required as promotionEvidenceRecordId for the glossary term below)
+    const [record] = await tx.insert(s.learningRecords)
+      .values({ trackId: track.id, seq: 1, recordType: 'prior_knowledge', title: 'Eval prior', body: 'Seeded for eval.', evidence: {} })
+      .returning();
+
+    // glossary term (so openerItems are present in delivered lesson)
+    await tx.insert(s.glossaryTerms).values({
+      trackId: track.id,
+      term: 'eval-term',
+      definition: 'A named container for a value.',
+      promotionEvidenceRecordId: record.id,
+    });
+
+    return { userId: user.id, learnerId: learner.id, trackId: track.id, nodeId: node.id };
   });
-
-  // skill node (frontier must be non-empty for stagePlan to succeed)
-  const [node] = await db.insert(s.skillNodes)
-    .values({ trackId: track.id, name: c.topic, summary: `Foundational skill: ${c.topic}`, missionRelevance: 0.9 })
-    .returning();
-
-  // learning record (required as promotionEvidenceRecordId for the glossary term below)
-  const [record] = await db.insert(s.learningRecords)
-    .values({ trackId: track.id, seq: 1, recordType: 'prior_knowledge', title: 'Eval prior', body: 'Seeded for eval.', evidence: {} })
-    .returning();
-
-  // glossary term (so openerItems are present in delivered lesson)
-  await db.insert(s.glossaryTerms).values({
-    trackId: track.id,
-    term: 'eval-term',
-    definition: 'A named container for a value.',
-    promotionEvidenceRecordId: record.id,
-  });
-
-  return { userId: user.id, learnerId: learner.id, trackId: track.id, nodeId: node.id };
 }
 
 async function cleanupFixture(db: Db, userId: string) {
   // Cascade: user → learner → track → mission/nodes/lessons (all cascade on user delete).
-  await db.delete(s.user).where((await import('drizzle-orm')).eq(s.user.id, userId));
+  await db.delete(s.user).where(eq(s.user.id, userId));
 }
 
 // ── per-case checks ───────────────────────────────────────────────────────────
@@ -199,7 +211,6 @@ async function runCase(db: Db, c: EvalCase): Promise<CaseResult> {
     await stageGenerate(db, lesson.id);
 
     // Re-read the lesson after the pipeline.
-    const { eq } = await import('drizzle-orm');
     const [delivered] = await db.select().from(s.lessons).where(eq(s.lessons.id, lesson.id));
 
     // Check 1: status ready
@@ -247,7 +258,9 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`\nRunning ${CASES.length} eval cases in ${isLive ? 'LIVE' : 'FAKE'} mode...\n`);
+  const cases = loadCases();
+
+  console.log(`\nRunning ${cases.length} eval cases in ${isLive ? 'LIVE' : 'FAKE'} mode...\n`);
 
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
   const db = drizzle(pool, { schema: s });
@@ -258,7 +271,7 @@ async function main() {
   const results: CaseResult[] = [];
   let anyFailure = false;
 
-  for (const c of CASES) {
+  for (const c of cases) {
     const result = await runCase(db, c);
     results.push(result);
     if (!result.pass) anyFailure = true;
@@ -307,8 +320,7 @@ async function main() {
   const outPath    = join(__dirname, 'results.json');
 
   const output = {
-    // generatedAtNote: intentionally not set here — callers (CI, founder scripts) may stamp it.
-    generatedAtNote: 'set by caller',
+    generatedAt: new Date().toISOString(),
     mode: isLive ? 'live' : 'fake',
     cases: results,
   };
