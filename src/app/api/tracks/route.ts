@@ -5,6 +5,7 @@ import { auth } from '@/lib/auth';
 import { db } from '@/lib/db';
 import * as s from '@/db/schema';
 import { getLearnerByUserId } from '@/server/learners';
+import { moderateText } from '@/server/moderation';
 import { createTrackInput, createTrackWithMission } from '@/server/tracks';
 
 const TRACK_CAP = 10;
@@ -26,6 +27,12 @@ export async function POST(req: Request) {
   const parsed = createTrackInput.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: 'invalid body', details: parsed.error.flatten() }, { status: 400 });
+  }
+
+  const moderation = await moderateText(`${parsed.data.topic}\n${parsed.data.whyText}`, 'learning_request');
+  if (!moderation.allowed) {
+    const status = moderation.errored ? 503 : 422;
+    return NextResponse.json({ error: 'moderation', retryable: !!moderation.errored }, { status });
   }
 
   // Fix 6: track cap — count the learner's non-archived tracks.
