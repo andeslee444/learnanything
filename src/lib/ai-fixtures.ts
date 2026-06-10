@@ -27,7 +27,7 @@ export const fakeOutputs: Record<LlmPurpose, unknown> = {
       { node: 'File I/O', prereq: 'Functions' },
       { node: 'CLI arguments', prereq: 'Functions' },
       { node: 'Testing basics', prereq: 'Functions' },
-      { node: 'Packaging', prereq: 'CLI arguments' },
+      { node: 'Packaging', prereq: 'Functions' },
       { node: 'Project: ship the CLI', prereq: 'Packaging' },
       { node: 'Project: ship the CLI', prereq: 'Error handling' },
     ],
