@@ -1,3 +1,4 @@
+import type { LanguageModel } from 'ai';
 import { llmObject } from '@/lib/ai';
 import type { DossierClaim, DossierContent } from '@/server/research/types';
 import { lessonContentSchema, type LessonPlan } from './blocks';
@@ -9,12 +10,14 @@ const generatorOutputSchema = lessonContentSchema; // blocks + winCheck
  *
  * @param correction - When present (Task 5 retry path), appends validator errors to the prompt
  *   so the model can fix every issue on its second attempt.
+ * @param opts.modelOverride - Passes through to llmObject for unit-testing with MockLanguageModelV3.
  */
 export async function generateBlocks(
   plan: LessonPlan,
   dossier: { sources: DossierContent['sources']; claims: DossierClaim[]; misconceptions: string[] },
-  levelBand: string,
+  levelBand: 'novice' | 'developing' | 'competent',
   correction?: string,
+  opts?: { modelOverride?: LanguageModel },
 ) {
   const basePrompt = [
     `Lesson plan: ${JSON.stringify(plan)}`,
@@ -33,6 +36,7 @@ export async function generateBlocks(
     purpose: 'generate-lesson',
     tier: 'generator',
     schema: generatorOutputSchema,
+    modelOverride: opts?.modelOverride,
     system: `You write the blocks for ONE short lesson from a research dossier.
 HARD RULES: every factual statement must be supported by a dossier claim; every article block's
 citationUrls must come from the dossier's source urls; never invent sources or facts beyond the claims;
