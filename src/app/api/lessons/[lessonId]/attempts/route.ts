@@ -1,4 +1,4 @@
-import { and, count, eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -76,6 +76,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ lessonId: stri
   const correct = answerIndex === item.correctIndex;
   const eventType = kind === 'win_check' ? 'win_check' : 'quiz_answer';
 
+  // Convention: attempt_events.blockId stores ITEM ids (not block-level ids).
   await db.insert(s.attemptEvents).values({
     learnerId: learner.id,
     lessonId,
@@ -85,25 +86,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ lessonId: stri
     payload: { lessonId, itemId, answerIndex },
   });
 
+  // TODO(phase-5): first-attempt-only grading — distinct-ever-correct is brute-forceable; replace with the evidence-gated distiller.
   // Win-check evaluation: count this learner's distinct CORRECT win_check answers for this lesson.
   if (kind === 'win_check') {
     const winCheckItemIds = content.winCheck.items.map((qi) => qi.id);
     const total = winCheckItemIds.length;
-
-    // Count distinct item ids answered correctly (re-answering is allowed; take the latest per item).
-    // Strategy: count rows where correct=true and blockId is in winCheckItemIds.
-    // We include the just-inserted row, so correct answers are all accumulated.
-    const [{ correctCount }] = await db
-      .select({ correctCount: count() })
-      .from(s.attemptEvents)
-      .where(
-        and(
-          eq(s.attemptEvents.learnerId, learner.id),
-          eq(s.attemptEvents.lessonId, lessonId),
-          eq(s.attemptEvents.eventType, 'win_check'),
-          eq(s.attemptEvents.correct, true),
-        ),
-      );
 
     // Distinct correct items (a learner could answer same item correctly multiple times).
     // We need distinct blockIds with correct=true.
@@ -131,8 +118,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ lessonId: stri
       const result = await recordWinCheckResult(db, lessonId, distinctCorrect, total);
       winCheckResult = { answered: distinctCorrect, total, passed: result.passed };
     }
-
-    void correctCount; // used above only for context; distinctCorrect is authoritative
 
     return NextResponse.json({
       correct,

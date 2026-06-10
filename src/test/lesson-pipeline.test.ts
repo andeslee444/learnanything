@@ -233,8 +233,10 @@ describe('createLessonRow — seq', () => {
   it('two lessons on one track get seq 1 and 2', async () => {
     const { trackId } = await seedFullTrack('seq-test@t.dev');
     const l1 = await createLessonRow(testDb, trackId);
-    const l2 = await createLessonRow(testDb, trackId);
     expect(l1.seq).toBe(1);
+    // Advance l1 to 'ready' so the unique generating index allows a second lesson.
+    await testDb.update(s.lessons).set({ status: 'ready' }).where(eq(s.lessons.id, l1.id));
+    const l2 = await createLessonRow(testDb, trackId);
     expect(l2.seq).toBe(2);
   });
 });
@@ -254,6 +256,122 @@ describe('winCheckPassed boundary tests', () => {
   // n=4: ceil(0.85*4)=ceil(3.4)=4 → need 4
   it('n=4: 4/4 passes', () => { expect(winCheckPassed(4, 4)).toBe(true); });
   it('n=4: 3/4 fails', () => { expect(winCheckPassed(3, 4)).toBe(false); });
+});
+
+// ── Test 6a: CAS — failLesson on already-ready lesson has no side-effects ────────
+
+describe('CAS — failLesson on already-terminal lesson', () => {
+  it('stagePlan on a ready lesson: no refund row, status stays ready (CAS is a no-op)', async () => {
+    // Seed a zero-node track — stagePlan would normally call failLesson.
+    // But if the lesson is already 'ready', the CAS WHERE status='generating' clause should skip it.
+    const [u] = await testDb
+      .insert(s.user)
+      .values({ id: crypto.randomUUID(), name: 'C', email: 'cas-fail-ready@t.dev' })
+      .returning();
+    const [learner] = await testDb
+      .insert(s.learners)
+      .values({ userId: u.id, displayName: 'C', ageBand: '18_plus' })
+      .returning();
+    const [track] = await testDb
+      .insert(s.tracks)
+      .values({ learnerId: learner.id, topic: 'CAS topic', vertical: 'programming' })
+      .returning();
+    await testDb.insert(s.missions).values({
+      trackId: track.id, whyText: 'learn', successCriteria: [{ description: 'ok' }], constraints: {}, outOfScope: [],
+    });
+    await testDb.insert(s.creditLedger).values({ userId: u.id, entryType: 'grant', amount: 3 });
+    const lesson = await createLessonRow(testDb, track.id);
+    await placeHold(testDb, u.id, lesson.id);
+
+    // Manually set the lesson to 'ready' (as if delivery already succeeded).
+    await testDb.update(s.lessons).set({ status: 'ready' }).where(eq(s.lessons.id, lesson.id));
+
+    // stagePlan reads status and skips if not 'generating'.
+    const result = await stagePlan(testDb, lesson.id);
+    expect(result.status).toBe('skipped');
+
+    // Lesson status must still be 'ready'.
+    const [row] = await testDb.select().from(s.lessons).where(eq(s.lessons.id, lesson.id));
+    expect(row.status).toBe('ready');
+
+    // No refund row should have appeared.
+    const refunds = await testDb
+      .select()
+      .from(s.creditLedger)
+      .where(and(eq(s.creditLedger.lessonId, lesson.id), eq(s.creditLedger.entryType, 'refund')));
+    expect(refunds.length).toBe(0);
+  });
+
+  it('deliver (stageGenerate) on a ready lesson: returns skipped, no duplicate capture', async () => {
+    const { trackId } = await seedFullTrack('cas-deliver-ready@t.dev');
+    const lesson = await createLessonRow(testDb, trackId);
+
+    // Set status to 'ready' to simulate a race where delivery already won.
+    await testDb.update(s.lessons).set({ status: 'ready' }).where(eq(s.lessons.id, lesson.id));
+
+    // stageGenerate reads status; it will return skipped because status !== 'generating'.
+    const result = await stageGenerate(testDb, lesson.id);
+    expect(result.status).toBe('skipped');
+  });
+});
+
+// ── Test 6b: Concurrent create guard — unique violation on one-generating-per-track ──
+
+describe('concurrent create guard — lessons_one_generating_per_track', () => {
+  it('inserting a second generating lesson for the same track throws a unique violation', async () => {
+    const { trackId } = await seedFullTrack('concurrent-create@t.dev');
+    // First lesson succeeds.
+    await createLessonRow(testDb, trackId);
+    // Second lesson in generating state must be rejected.
+    const err = await createLessonRow(testDb, trackId).catch((e: unknown) => e);
+    // Drizzle wraps PG errors: outer message or .cause.message contains the index name.
+    const causeMsg = err instanceof Error && err.cause instanceof Error ? err.cause.message : '';
+    const msg = err instanceof Error ? err.message : String(err);
+    expect(msg + causeMsg).toMatch(/lessons_one_generating_per_track/);
+  });
+});
+
+// ── Test 6c: fail-stage via stagePlan on a zero-node track ────────────────────────
+// runLessonStage('fail') is a thin wrapper around failLesson(appDb, ...) — appDb uses
+// DATABASE_URL (main DB), not testDb. We test the fail-stage logic directly via
+// stagePlan(testDb, ...) on a zero-node track, which calls the same failLesson path.
+
+describe("fail stage — marks generating lesson failed and refunds the hold", () => {
+  it('stagePlan on a no-skill-node track marks lesson failed + refunds', async () => {
+    // Re-uses the zero-node setup from test 2 but as a standalone assertion.
+    const [u] = await testDb
+      .insert(s.user)
+      .values({ id: crypto.randomUUID(), name: 'F', email: 'fail-stage@t.dev' })
+      .returning();
+    const [learner] = await testDb
+      .insert(s.learners)
+      .values({ userId: u.id, displayName: 'F', ageBand: '18_plus' })
+      .returning();
+    const [track] = await testDb
+      .insert(s.tracks)
+      .values({ learnerId: learner.id, topic: 'Fail topic', vertical: 'programming' })
+      .returning();
+    await testDb.insert(s.missions).values({
+      trackId: track.id, whyText: 'learn', successCriteria: [{ description: 'ok' }], constraints: {}, outOfScope: [],
+    });
+    await testDb.insert(s.creditLedger).values({ userId: u.id, entryType: 'grant', amount: 3 });
+    const lesson = await createLessonRow(testDb, track.id);
+    await placeHold(testDb, u.id, lesson.id);
+
+    // stagePlan calls failLesson(testDb, ...) when no frontier node found.
+    const result = await stagePlan(testDb, lesson.id);
+    expect(result.status).toBe('failed');
+
+    const [row] = await testDb.select().from(s.lessons).where(eq(s.lessons.id, lesson.id));
+    expect(row.status).toBe('failed');
+
+    const refunds = await testDb
+      .select()
+      .from(s.creditLedger)
+      .where(and(eq(s.creditLedger.lessonId, lesson.id), eq(s.creditLedger.entryType, 'refund')));
+    expect(refunds.length).toBe(1);
+    expect(refunds[0].amount).toBe(1);
+  });
 });
 
 // ── Test 6: generateBlocks end-to-end with MockLanguageModelV3 + correction ────

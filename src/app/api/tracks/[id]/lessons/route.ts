@@ -1,4 +1,4 @@
-import { eq, and } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { start } from 'workflow/api';
@@ -8,7 +8,7 @@ import * as s from '@/db/schema';
 import { InsufficientCreditsError, ensureMonthlyGrant, placeHold } from '@/lib/credits';
 import { getLearnerByUserId } from '@/server/learners';
 import { getTrackDetail } from '@/server/tracks';
-import { createLessonRow } from '@/server/lessons/pipeline';
+import { createLessonRow, failLessonSafely } from '@/server/lessons/pipeline';
 import { generateLessonWorkflow } from '@/workflows/generate-lesson';
 
 export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -26,19 +26,22 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
     return NextResponse.json({ error: 'track_not_initialized' }, { status: 409 });
   }
 
-  // Reject if a lesson is already generating on this track.
-  const [generating] = await db
-    .select({ id: s.lessons.id })
-    .from(s.lessons)
-    .where(and(eq(s.lessons.trackId, id), eq(s.lessons.status, 'generating')))
-    .limit(1);
-  if (generating) {
-    return NextResponse.json({ error: 'lesson_already_generating' }, { status: 409 });
-  }
-
   // Credit lifecycle: grant → hold (402 on insufficient).
   await ensureMonthlyGrant(db, session.user.id);
-  const lesson = await createLessonRow(db, id);
+
+  // I1: createLessonRow may violate lessons_one_generating_per_track → 409.
+  let lesson: Awaited<ReturnType<typeof createLessonRow>>;
+  try {
+    lesson = await createLessonRow(db, id);
+  } catch (err) {
+    const causeMsg = err instanceof Error && err.cause instanceof Error ? err.cause.message : '';
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('lessons_one_generating_per_track') || causeMsg.includes('lessons_one_generating_per_track')) {
+      return NextResponse.json({ error: 'already_generating' }, { status: 409 });
+    }
+    throw err;
+  }
+
   try {
     await placeHold(db, session.user.id, lesson.id);
   } catch (err) {
@@ -47,11 +50,16 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
       await db.delete(s.lessons).where(eq(s.lessons.id, lesson.id));
       return NextResponse.json({ error: 'credits' }, { status: 402 });
     }
+    // I2: unexpected error after row exists — delete orphan before rethrowing.
+    await db.delete(s.lessons).where(eq(s.lessons.id, lesson.id));
     throw err;
   }
 
-  // Fire-and-forget: the client polls GET /api/lessons/[id].
-  void start(generateLessonWorkflow, [lesson.id]);
+  // C1: start with catch to mark lesson failed rather than orphaning it.
+  start(generateLessonWorkflow, [lesson.id]).catch(async (err) => {
+    console.error('workflow start failed', err);
+    await failLessonSafely(db, lesson.id, 'generation error — try again');
+  });
 
   return NextResponse.json({ lessonId: lesson.id });
 }

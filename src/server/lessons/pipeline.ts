@@ -45,13 +45,29 @@ async function findHoldId(db: Db, lessonId: string): Promise<string | null> {
 }
 
 async function failLesson(db: Db, lessonId: string, reason: string) {
-  await db
+  // C2: CAS — only transition from 'generating'; if someone else already terminal'd it, skip side-effects.
+  const rows = await db
     .update(s.lessons)
     .set({ status: 'failed', content: { failureReason: reason } })
-    .where(eq(s.lessons.id, lessonId));
+    .where(and(eq(s.lessons.id, lessonId), eq(s.lessons.status, 'generating')))
+    .returning({ id: s.lessons.id });
+  if (rows.length === 0) return { status: 'failed' as const, reason };
   const holdId = await findHoldId(db, lessonId);
   if (holdId) await refundHold(db, holdId).catch((err) => console.error('refund failed', err));
   return { status: 'failed' as const, reason };
+}
+
+/**
+ * Safe public wrapper: marks the lesson failed and refunds.
+ * Call from route start-catch handlers — swallows errors so a secondary failure
+ * never masks the original error.
+ */
+export async function failLessonSafely(db: Db, lessonId: string, reason: string) {
+  try {
+    await failLesson(db, lessonId, reason);
+  } catch (err) {
+    console.error('failLessonSafely secondary error', err);
+  }
 }
 
 /** Stage 1 (spec §2 step 1): plan from track state. */
@@ -151,7 +167,8 @@ async function deliver(
       moderation.errored ? 'safety check unavailable — try again' : 'lesson failed the safety check',
     );
   }
-  await db
+  // C2: CAS — only transition from 'generating'; if someone else already terminal'd it, skip capture.
+  const rows = await db
     .update(s.lessons)
     .set({
       content: { ...content, openerItems },
@@ -159,16 +176,19 @@ async function deliver(
       citations: sources.map((src) => ({ url: src.url })),
       modelVersion: MODEL_TIERS.generator,
     })
-    .where(eq(s.lessons.id, lessonId));
+    .where(and(eq(s.lessons.id, lessonId), eq(s.lessons.status, 'generating')))
+    .returning({ id: s.lessons.id });
+  if (rows.length === 0) return { status: 'skipped' as const };
   const holdId = await findHoldId(db, lessonId);
   if (holdId) await captureHold(db, holdId).catch((err) => console.error('capture failed', err));
   return { status: 'ready' as const };
 }
 
 /** Entry point the workflow steps call (each stage by id — serializable args only). */
-export async function runLessonStage(stage: 'plan' | 'research' | 'generate', lessonId: string) {
+export async function runLessonStage(stage: 'plan' | 'research' | 'generate' | 'fail', lessonId: string, message?: string) {
   if (stage === 'plan') return stagePlan(appDb, lessonId);
   if (stage === 'research') return stageResearch(appDb, lessonId);
+  if (stage === 'fail') return failLesson(appDb, lessonId, message ?? 'generation error — try again');
   return stageGenerate(appDb, lessonId);
 }
 
@@ -178,7 +198,10 @@ export async function recordWinCheckResult(db: Db, lessonId: string, correct: nu
   const [lesson] = await db.select().from(s.lessons).where(eq(s.lessons.id, lessonId));
   const snapshot = lesson?.zpdSnapshot as { nodeId?: string };
   if (snapshot?.nodeId) {
-    await db.update(s.skillNodes).set({ mastery: 'demonstrated' }).where(eq(s.skillNodes.id, snapshot.nodeId));
+    await db
+      .update(s.skillNodes)
+      .set({ mastery: 'demonstrated' })
+      .where(and(eq(s.skillNodes.id, snapshot.nodeId), eq(s.skillNodes.trackId, lesson.trackId)));
   }
   return { passed: true };
 }
