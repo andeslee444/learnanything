@@ -19,6 +19,7 @@ export default async function TracksPage() {
       <main className="flex min-h-[calc(100vh-4rem)] items-center justify-center px-6 py-12">
         <Link
           href="/tracks/new"
+          data-testid="new-track"
           className="flex flex-col items-center gap-4 rounded-2xl border-2 border-dashed border-sky-300 bg-sky-50 px-12 py-14 text-center transition hover:border-sky-400 hover:bg-sky-100"
           aria-label="Start a new track"
         >

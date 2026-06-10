@@ -24,10 +24,13 @@ type QuizState = {
   submitting: boolean;
 };
 
-export function TrackSetup({ trackId, mode }: Props) {
+// All hooks and logic live here; only rendered for mode='build'.
+function TrackBuildSetup({ trackId }: { trackId: string }) {
   const router = useRouter();
   const firedRef = useRef(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
 
   const [msgIndex, setMsgIndex] = useState(0);
   const [pending, setPending] = useState(false);
@@ -35,11 +38,19 @@ export function TrackSetup({ trackId, mode }: Props) {
   const [waitMsg, setWaitMsg] = useState(false);
   const [quizState, setQuizState] = useState<QuizState | null>(null);
 
-  // mode='calibrate': returning visitors don't retake — deliberate plan decision
-  if (mode === 'calibrate') return null;
+  // Clear the advance timer and mark unmounted on cleanup.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (advanceTimerRef.current) {
+        clearTimeout(advanceTimerRef.current);
+        advanceTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // mode='build': fire initialize on mount (guarded with useRef to prevent double-fire)
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   useEffect(() => {
     if (firedRef.current) return;
     firedRef.current = true;
@@ -68,6 +79,7 @@ export function TrackSetup({ trackId, mode }: Props) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
+      if (!mountedRef.current) return;
       setPending(false);
 
       if (res.status === 429) {
@@ -108,6 +120,7 @@ export function TrackSetup({ trackId, mode }: Props) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
+      if (!mountedRef.current) return;
       setPending(false);
       setError("Network error — please check your connection and try again.");
     }
@@ -142,11 +155,15 @@ export function TrackSetup({ trackId, mode }: Props) {
       // best-effort; calibration is raw signal — proceed even on network failure
     }
 
+    if (!mountedRef.current) return;
+
     const correct = answerIndex === item.correctIndex;
     setQuizState((prev) => prev ? { ...prev, answered: true, lastCorrect: correct, submitting: false } : null);
 
     // Auto-advance after ~800ms
-    setTimeout(() => {
+    advanceTimerRef.current = setTimeout(() => {
+      advanceTimerRef.current = null;
+      if (!mountedRef.current) return;
       setQuizState((prev) => {
         if (!prev) return null;
         const next = prev.itemIndex + 1;
@@ -226,17 +243,21 @@ export function TrackSetup({ trackId, mode }: Props) {
             </button>
           ))}
         </div>
-        {answered && lastCorrect !== null && (
-          <p
-            className="mt-4 text-sm font-medium text-sky-700"
-            aria-live="polite"
-          >
-            {lastCorrect ? 'Nice!' : "Good to know — we'll start there."}
-          </p>
-        )}
+        {/* Persistent live region — always rendered so screen readers pick up changes */}
+        <p aria-live="polite" className="mt-4 text-sm font-medium text-sky-700">
+          {answered && lastCorrect !== null
+            ? (lastCorrect ? 'Nice!' : "Good to know — we'll start there.")
+            : ''}
+        </p>
       </div>
     );
   }
 
   return null;
+}
+
+// Thin public wrapper — calibrate mode returns null early without touching any hooks.
+export function TrackSetup({ trackId, mode }: Props) {
+  if (mode === 'calibrate') return null;
+  return <TrackBuildSetup trackId={trackId} />;
 }
