@@ -10,7 +10,14 @@ export const MODEL_TIERS = {
 } as const;
 export type ModelTier = keyof typeof MODEL_TIERS;
 
-export type LlmPurpose = 'concreteness' | 'skill-graph' | 'calibration-quiz';
+export type LlmPurpose =
+  | 'concreteness'
+  | 'skill-graph'
+  | 'calibration-quiz'
+  | 'vet-sources'
+  | 'extract-source'
+  | 'synthesize-dossier'
+  | 'moderation';
 
 /**
  * Single entry point for structured LLM calls.
