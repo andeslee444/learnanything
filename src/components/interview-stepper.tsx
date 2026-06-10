@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 // Type-only import: CreateTrackInput is a plain Zod-inferred type (no runtime server code).
 // If this import ever drags in server-only deps, duplicate the type here with a `satisfies` check.
@@ -8,7 +8,7 @@ import type { CreateTrackInput } from '@/server/tracks';
 
 type Step = 'why' | 'followup' | 'success' | 'constraints' | 'prior' | 'scope' | 'card';
 
-const STEPS: Step[] = ['why', 'followup', 'success', 'constraints', 'prior', 'scope', 'card'];
+const ALL_STEPS: Step[] = ['why', 'followup', 'success', 'constraints', 'prior', 'scope', 'card'];
 const STEP_LABELS: Record<Step, string> = {
   why: 'Why',
   followup: 'Tell us more',
@@ -23,10 +23,10 @@ const WHY_CHIPS = ['Pass an exam', 'Build something', 'Career move', 'Teach some
 
 // ── Shared UI pieces (outside component to satisfy react-hooks/static-components) ──
 
-function ProgressDots({ stepIndex }: { stepIndex: number }) {
+function ProgressDots({ steps, stepIndex }: { steps: Step[]; stepIndex: number }) {
   return (
     <div className="mb-8 flex justify-center gap-2" aria-label="Step progress">
-      {STEPS.map((s, i) => (
+      {steps.map((s, i) => (
         <span
           key={s}
           className={`h-2 w-2 rounded-full ${i === stepIndex ? 'bg-sky-600' : 'bg-sky-200'}`}
@@ -91,6 +91,20 @@ export function InterviewStepper({ topic, vertical }: Props) {
   const [submitBusy, setSubmitBusy] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  // ── card-seed guard: seed card state only on first open ──────
+  const cardSeeded = useRef(false);
+
+  // ── focus management: shared ref for step headings ───────────
+  const headingRef = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, [step]);
+
+  // ── dynamic steps list (hide followup dot unless shown) ──────
+  const visibleSteps: Step[] = ALL_STEPS.filter((s) => s !== 'followup' || followUpShown);
+  const stepIndex = visibleSteps.indexOf(step);
+
   // ── computed effective why (with follow-up appended) ─────────
   function effectiveWhy(): string {
     if (followUpQuestion && followUpAnswer.trim()) {
@@ -98,9 +112,6 @@ export function InterviewStepper({ topic, vertical }: Props) {
     }
     return whyText;
   }
-
-  // ── progress ─────────────────────────────────────────────────
-  const stepIndex = STEPS.indexOf(step);
 
   // ── step helpers ─────────────────────────────────────────────
   function goBack() {
@@ -170,15 +181,18 @@ export function InterviewStepper({ topic, vertical }: Props) {
     setOutOfScope(outOfScope.filter((t) => t !== tag));
   }
 
-  // ── open card: sync card state from interview state ───────────
+  // ── open card: seed card state only on first open ────────────
   function openCard() {
-    setCardWhy(effectiveWhy());
-    setCardCriteria([...successCriteria]);
-    setCardTimePerWeek(timePerWeek);
-    setCardDeadline(deadline);
-    setCardNotes(notes);
-    setCardPrior(priorKnowledge);
-    setCardScope([...outOfScope]);
+    if (!cardSeeded.current) {
+      setCardWhy(effectiveWhy());
+      setCardCriteria([...successCriteria]);
+      setCardTimePerWeek(timePerWeek);
+      setCardDeadline(deadline);
+      setCardNotes(notes);
+      setCardPrior(priorKnowledge);
+      setCardScope([...outOfScope]);
+      cardSeeded.current = true;
+    }
     setStep('card');
   }
 
@@ -233,8 +247,8 @@ export function InterviewStepper({ topic, vertical }: Props) {
   if (step === 'why') {
     return (
       <div className="mx-auto w-full max-w-xl py-8">
-        <ProgressDots stepIndex={stepIndex} />
-        <h2 className="text-2xl font-medium text-ink-900">Why do you want to learn this?</h2>
+        <ProgressDots steps={visibleSteps} stepIndex={stepIndex} />
+        <h2 ref={headingRef} tabIndex={-1} className="text-2xl font-medium text-ink-900">Why do you want to learn this?</h2>
         <p className="mt-2 text-sm text-ink-600">
           Be as specific as you like — it helps us build a mission around your real goal.
         </p>
@@ -285,12 +299,13 @@ export function InterviewStepper({ topic, vertical }: Props) {
   if (step === 'followup') {
     return (
       <div className="mx-auto w-full max-w-xl py-8">
-        <ProgressDots stepIndex={stepIndex} />
+        <ProgressDots steps={visibleSteps} stepIndex={stepIndex} />
         <BackButton onBack={goBack} />
-        <h2 className="text-2xl font-medium text-ink-900">One quick question</h2>
+        <h2 ref={headingRef} tabIndex={-1} className="text-2xl font-medium text-ink-900">One quick question</h2>
         {/* Render the LLM-generated follow-up question as plain text only — never use dangerouslySetInnerHTML */}
         <p className="mt-4 text-ink-900">{followUpQuestion}</p>
         <textarea
+          data-testid="followup-input"
           aria-label="Your answer to the follow-up question"
           className="mt-4 w-full rounded-md border border-ink-400/40 bg-white p-3 text-ink-900 placeholder:text-ink-400 focus:outline-none focus:ring-2 focus:ring-sky-400"
           rows={3}
@@ -317,9 +332,9 @@ export function InterviewStepper({ topic, vertical }: Props) {
     const canAddMore = successCriteria.length < 3;
     return (
       <div className="mx-auto w-full max-w-xl py-8">
-        <ProgressDots stepIndex={stepIndex} />
+        <ProgressDots steps={visibleSteps} stepIndex={stepIndex} />
         <BackButton onBack={goBack} />
-        <h2 className="text-2xl font-medium text-ink-900">What does success look like?</h2>
+        <h2 ref={headingRef} tabIndex={-1} className="text-2xl font-medium text-ink-900">What does success look like?</h2>
         <p className="mt-2 text-sm text-ink-600">
           1–3 concrete outcomes. How will you know you&apos;ve learned what you set out to?
         </p>
@@ -327,7 +342,7 @@ export function InterviewStepper({ topic, vertical }: Props) {
           {successCriteria.map((c, i) => (
             <div key={i} className="flex items-center gap-2">
               <input
-                data-testid={`criterion-input-${i}`}
+                data-testid={`step-criterion-input-${i}`}
                 aria-label={`Success criterion ${i + 1}`}
                 className="flex-1 rounded-md border border-ink-400/40 bg-white p-3 text-ink-900 placeholder:text-ink-400 focus:outline-none focus:ring-2 focus:ring-sky-400"
                 placeholder={`Criterion ${i + 1}`}
@@ -375,9 +390,9 @@ export function InterviewStepper({ topic, vertical }: Props) {
   if (step === 'constraints') {
     return (
       <div className="mx-auto w-full max-w-xl py-8">
-        <ProgressDots stepIndex={stepIndex} />
+        <ProgressDots steps={visibleSteps} stepIndex={stepIndex} />
         <BackButton onBack={goBack} />
-        <h2 className="text-2xl font-medium text-ink-900">Any constraints on your time?</h2>
+        <h2 ref={headingRef} tabIndex={-1} className="text-2xl font-medium text-ink-900">Any constraints on your time?</h2>
         <p className="mt-2 text-sm text-ink-600">Optional — helps us pace the learning map.</p>
         <div className="mt-6 space-y-4">
           <div>
@@ -442,9 +457,9 @@ export function InterviewStepper({ topic, vertical }: Props) {
   if (step === 'prior') {
     return (
       <div className="mx-auto w-full max-w-xl py-8">
-        <ProgressDots stepIndex={stepIndex} />
+        <ProgressDots steps={visibleSteps} stepIndex={stepIndex} />
         <BackButton onBack={goBack} />
-        <h2 className="text-2xl font-medium text-ink-900">What do you already know?</h2>
+        <h2 ref={headingRef} tabIndex={-1} className="text-2xl font-medium text-ink-900">What do you already know?</h2>
         <p className="mt-2 text-sm text-ink-600">Optional — skip if you&apos;re starting from scratch.</p>
         <textarea
           data-testid="prior-input"
@@ -473,9 +488,9 @@ export function InterviewStepper({ topic, vertical }: Props) {
   if (step === 'scope') {
     return (
       <div className="mx-auto w-full max-w-xl py-8">
-        <ProgressDots stepIndex={stepIndex} />
+        <ProgressDots steps={visibleSteps} stepIndex={stepIndex} />
         <BackButton onBack={goBack} />
-        <h2 className="text-2xl font-medium text-ink-900">Anything you don&apos;t want to cover?</h2>
+        <h2 ref={headingRef} tabIndex={-1} className="text-2xl font-medium text-ink-900">Anything you don&apos;t want to cover?</h2>
         <p className="mt-2 text-sm text-ink-600">
           Optional — type a topic and press Enter. Click a tag to remove it.
         </p>
@@ -521,9 +536,9 @@ export function InterviewStepper({ topic, vertical }: Props) {
   if (step === 'card') {
     return (
       <div className="mx-auto w-full max-w-xl py-8">
-        <ProgressDots stepIndex={stepIndex} />
+        <ProgressDots steps={visibleSteps} stepIndex={stepIndex} />
         <BackButton onBack={goBack} />
-        <h2 className="text-2xl font-medium text-ink-900">Your Mission Card</h2>
+        <h2 ref={headingRef} tabIndex={-1} className="text-2xl font-medium text-ink-900">Your Mission Card</h2>
         <p className="mt-2 text-sm text-ink-600">
           Everything&apos;s editable. Make it feel right before confirming.
         </p>
@@ -556,7 +571,7 @@ export function InterviewStepper({ topic, vertical }: Props) {
               {cardCriteria.map((c, i) => (
                 <input
                   key={i}
-                  data-testid={`criterion-input-${i}`}
+                  data-testid={`card-criterion-input-${i}`}
                   aria-label={`Success criterion ${i + 1}`}
                   className="w-full rounded-md border border-ink-400/40 bg-cloud p-3 text-ink-900 focus:outline-none focus:ring-2 focus:ring-sky-400"
                   value={c}
@@ -574,13 +589,17 @@ export function InterviewStepper({ topic, vertical }: Props) {
           <div>
             <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-400">Constraints</p>
             <div className="space-y-2">
-              <input
+              <select
                 aria-label="Time per week"
-                className="w-full rounded-md border border-ink-400/40 bg-cloud p-3 text-ink-900 placeholder:text-ink-400 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                placeholder="Time per week"
+                className="w-full rounded-md border border-ink-400/40 bg-cloud p-3 text-ink-900 focus:outline-none focus:ring-2 focus:ring-sky-400"
                 value={cardTimePerWeek}
                 onChange={(e) => setCardTimePerWeek(e.target.value)}
-              />
+              >
+                <option value="">No preference</option>
+                <option value="1 hour">1 hour per week</option>
+                <option value="3 hours">3 hours per week</option>
+                <option value="5+ hours">5+ hours per week</option>
+              </select>
               <input
                 aria-label="Deadline"
                 className="w-full rounded-md border border-ink-400/40 bg-cloud p-3 text-ink-900 placeholder:text-ink-400 focus:outline-none focus:ring-2 focus:ring-sky-400"
