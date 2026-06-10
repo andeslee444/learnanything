@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { auth } from '@/lib/auth';
 import { llmObject } from '@/lib/ai';
+import { db } from '@/lib/db';
+import { getLearnerByUserId } from '@/server/learners';
 
 // Process-local debounce — good enough pre-credits; replace with a DB counter at the billing phase.
 const lastCallByUser = new Map<string, number>();
@@ -16,6 +18,8 @@ const resultSchema = z.object({
 export async function POST(req: Request) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  const learner = await getLearnerByUserId(db, session.user.id);
+  if (!learner) return NextResponse.json({ error: 'no learner profile' }, { status: 403 });
   const body = z.object({ topic: z.string().min(1).max(200), why: z.string().min(1).max(2000) }).safeParse(await req.json());
   if (!body.success) return NextResponse.json({ error: 'invalid body' }, { status: 400 });
 

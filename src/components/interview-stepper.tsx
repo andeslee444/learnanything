@@ -624,7 +624,7 @@ export function InterviewStepper({ topic, vertical }: Props) {
             </label>
             <textarea
               id="card-prior"
-              data-testid="prior-input"
+              data-testid="card-prior-input"
               aria-label="What you already know"
               className="w-full rounded-md border border-ink-400/40 bg-cloud p-3 text-ink-900 placeholder:text-ink-400 focus:outline-none focus:ring-2 focus:ring-sky-400"
               rows={2}
