@@ -1,8 +1,15 @@
 import type { LessonBlock, LessonContent } from './blocks';
+import { fleschKincaidGrade, stripMarkdown, worstSentences, READABILITY_BAND_TARGETS } from './readability';
+
+export type GlossaryAliasEntry = { term: string; aliases: string[] };
 
 export type LessonValidationInput = {
   content: Omit<LessonContent, 'openerItems'>;
   dossierSourceUrls: string[];
+  /** Age band for readability gating — undefined skips the readability check */
+  ageBand?: string;
+  /** Glossary alias entries for the alias scan — undefined/empty skips the scan */
+  glossaryAvoidAliases?: GlossaryAliasEntry[];
 };
 
 /** 4a validator subset (spec §2 step 4). Readability + glossary-alias scans land in 4b. */
@@ -27,6 +34,54 @@ export function validateLessonContent(input: LessonValidationInput): { ok: boole
   const totalChars = blocks.reduce((n, b) => n + (b.type === 'article' ? b.markdown.length : 0), 0);
   if (totalChars > 9000)
     errors.push(`article text ${totalChars} chars exceeds the 5-15 minute budget proxy (9000)`);
+
+  // ── Readability gate ──────────────────────────────────────────────────────────
+  if (input.ageBand) {
+    const maxGrade = READABILITY_BAND_TARGETS[input.ageBand];
+    if (maxGrade !== undefined) {
+      for (const block of blocks) {
+        if (block.type === 'article') {
+          const plain = stripMarkdown(block.markdown);
+          const grade = fleschKincaidGrade(plain);
+          if (grade > maxGrade) {
+            const worst = worstSentences(plain, 2);
+            const worstDesc = worst
+              .map((s) => `"${s.sentence.slice(0, 80)}…" (grade ${s.grade.toFixed(1)})`)
+              .join('; ');
+            errors.push(
+              `article "${block.heading}" FK grade ${grade.toFixed(1)} exceeds ${input.ageBand} limit ${maxGrade}; worst sentences: ${worstDesc}`,
+            );
+          }
+        }
+      }
+    }
+  }
+
+  // ── Alias scan ────────────────────────────────────────────────────────────────
+  if (input.glossaryAvoidAliases && input.glossaryAvoidAliases.length > 0) {
+    // Collect all text to scan: article markdown + quiz/winCheck question+option text
+    const articleTexts = blocks
+      .filter((b) => b.type === 'article')
+      .map((b) => (b as Extract<LessonBlock, { type: 'article' }>).markdown);
+    const quizTexts = blocks
+      .filter((b) => b.type === 'quiz')
+      .flatMap((b) => {
+        const qb = b as Extract<LessonBlock, { type: 'quiz' }>;
+        return qb.items.flatMap((item) => [item.question, ...item.options]);
+      });
+    const winCheckTexts = winCheck.items.flatMap((item) => [item.question, ...item.options]);
+    const allText = [...articleTexts, ...quizTexts, ...winCheckTexts].join('\n');
+
+    for (const { term, aliases } of input.glossaryAvoidAliases) {
+      for (const alias of aliases) {
+        // Case-insensitive whole-word match
+        const regex = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+        if (regex.test(allText)) {
+          errors.push(`alias "${alias}" of promoted term "${term}" found in lesson content`);
+        }
+      }
+    }
+  }
 
   // ── AnimatedDiagram structural validators ────────────────────────────────────
   for (const block of blocks) {

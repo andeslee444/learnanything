@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, lt, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as s from '@/db/schema';
 import { MODEL_TIERS } from '@/lib/ai';
@@ -118,7 +118,16 @@ export async function stageResearch(db: Db, lessonId: string) {
 export async function stageGenerate(db: Db, lessonId: string) {
   const [lesson] = await db.select().from(s.lessons).where(eq(s.lessons.id, lessonId));
   if (!lesson || lesson.status !== 'generating') return { status: 'skipped' as const };
-  const [track] = await db.select().from(s.tracks).where(eq(s.tracks.id, lesson.trackId));
+
+  // Join track → learner to hydrate the learner's ageBand for readability gating.
+  const [trackRow] = await db
+    .select({ track: s.tracks, ageBand: s.learners.ageBand })
+    .from(s.tracks)
+    .innerJoin(s.learners, eq(s.tracks.learnerId, s.learners.id))
+    .where(eq(s.tracks.id, lesson.trackId));
+  if (!trackRow) return failLesson(db, lessonId, 'track or learner missing');
+  const { track, ageBand } = trackRow;
+
   const snapshot = lesson.zpdSnapshot as { dossierId?: string };
   if (!snapshot?.dossierId) return failLesson(db, lessonId, 'dossier reference missing');
   const [dossier] = await db.select().from(s.topicDossiers).where(eq(s.topicDossiers.id, snapshot.dossierId));
@@ -131,6 +140,12 @@ export async function stageGenerate(db: Db, lessonId: string) {
   }
   const plan = specParse.data;
 
+  // Hydrate glossary aliases from the track state for the alias scan.
+  const trackState = await hydrateTrackState(db, lesson.trackId);
+  const glossaryAvoidAliases = (trackState?.glossary ?? []).flatMap((g) =>
+    g.avoidAliases?.length ? [{ term: g.term, aliases: g.avoidAliases }] : [],
+  );
+
   const dossierInput = {
     sources: dossier.sources,
     claims: dossier.claims,
@@ -139,16 +154,22 @@ export async function stageGenerate(db: Db, lessonId: string) {
   const levelBand = track.expertiseBand as 'novice' | 'developing' | 'competent';
 
   const generated = await generateBlocks(plan, dossierInput, levelBand);
-  const check = validateLessonContent({ content: generated, dossierSourceUrls: dossier.sources.map((src) => src.url) });
+  const validatorInput = {
+    content: generated,
+    dossierSourceUrls: dossier.sources.map((src) => src.url),
+    ageBand,
+    glossaryAvoidAliases,
+  };
+  const check = validateLessonContent(validatorInput);
   if (!check.ok) {
-    // IMPLEMENTER NOTE 2: thread validator errors into the retry via generateBlocks' correction parameter.
+    // IMPLEMENTER NOTE 2: thread validator errors (including readability) into the retry.
     const correction = check.errors.join('; ');
     const retry = await generateBlocks(plan, dossierInput, levelBand, correction);
-    const recheck = validateLessonContent({ content: retry, dossierSourceUrls: dossier.sources.map((src) => src.url) });
+    const recheck = validateLessonContent({ ...validatorInput, content: retry });
     if (!recheck.ok) return failLesson(db, lessonId, `lesson failed validation: ${recheck.errors.join('; ')}`);
-    return deliver(db, lessonId, retry, dossier.sources);
+    return deliver(db, lessonId, retry, dossier.sources, trackState);
   }
-  return deliver(db, lessonId, generated, dossier.sources);
+  return deliver(db, lessonId, generated, dossier.sources, trackState);
 }
 
 async function deliver(
@@ -156,9 +177,10 @@ async function deliver(
   lessonId: string,
   content: Omit<LessonContent, 'openerItems'>,
   sources: Array<{ url: string }>,
+  trackState?: Awaited<ReturnType<typeof hydrateTrackState>>,
 ) {
   const [lesson] = await db.select().from(s.lessons).where(eq(s.lessons.id, lessonId));
-  const state = await hydrateTrackState(db, lesson.trackId);
+  const state = trackState ?? (await hydrateTrackState(db, lesson.trackId));
   const openerItems = buildOpenerItems(state?.glossary ?? []);
   const moderation = await moderateText(JSON.stringify(content), 'assembled_lesson');
   if (!moderation.allowed) {
@@ -191,6 +213,39 @@ export async function runLessonStage(stage: 'plan' | 'research' | 'generate' | '
   if (stage === 'research') return stageResearch(appDb, lessonId);
   if (stage === 'fail') return failLesson(appDb, lessonId, message ?? 'generation error — try again');
   return stageGenerate(appDb, lessonId);
+}
+
+/**
+ * Sweep lessons stuck in 'generating' that are older than `olderThanMs` ms.
+ * Uses CAS (WHERE status = 'generating') via failLesson so a concurrent delivery
+ * that wins the race is safe.
+ *
+ * `olderThanMs` is injectable so tests can pass 0 (or negative) to qualify
+ * freshly-created rows without having to manipulate the DB clock.
+ * Production callers use the default of 15 minutes.
+ */
+export async function sweepStaleLessons(
+  db: Db,
+  trackId: string,
+  olderThanMs = 15 * 60 * 1000,
+): Promise<{ swept: number }> {
+  const cutoff = new Date(Date.now() - olderThanMs);
+  const stale = await db
+    .select({ id: s.lessons.id })
+    .from(s.lessons)
+    .where(
+      and(
+        eq(s.lessons.trackId, trackId),
+        eq(s.lessons.status, 'generating'),
+        lt(s.lessons.updatedAt, cutoff),
+      ),
+    );
+  let swept = 0;
+  for (const { id } of stale) {
+    const result = await failLesson(db, id, 'generation timed out — please try again');
+    if (result.status === 'failed') swept++;
+  }
+  return { swept };
 }
 
 /** Minimal mastery update on win-check pass — Phase 5 replaces this with evidence-gated learning records. */

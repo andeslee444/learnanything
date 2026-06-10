@@ -624,3 +624,134 @@ describe('cross-fixture coherence', () => {
     expect(result.errors).toHaveLength(0);
   });
 });
+
+// ── readability validation ────────────────────────────────────────────────────
+
+describe('validateLessonContent — readability gate', () => {
+  it('passes when article is within 18_plus FK band (grade ≤14)', () => {
+    const content = makeValidContent();
+    const result = validateLessonContent({
+      content,
+      dossierSourceUrls: DOSSIER_SOURCE_URLS,
+      ageBand: '18_plus',
+    });
+    // The default fixture articles are grade ~7-10, well within limit 14
+    expect(result.errors.filter((e) => e.includes('FK grade'))).toHaveLength(0);
+  });
+
+  it('fails when article FK grade exceeds 13_15 band limit (grade ≤9) — uses synthetic grade-16 text', () => {
+    const content = makeValidContent();
+    // Construct a complex, long-sentence text that produces a high FK grade
+    const hardText =
+      'The comprehensive multifaceted ramifications of contemporary technological infrastructure advancements necessitate sophisticated interdisciplinary methodological frameworks for systematic evaluation. ' +
+      'Consequently, practitioners confronting multitudinous organizational stakeholder requirements must demonstrate extraordinary proficiency in coordinating simultaneous computational architectures. ' +
+      'Furthermore, the philosophical underpinnings undergirding epistemological frameworks necessitate continuous reexamination considering multidimensional transformational paradigmatic shifts. ' +
+      'Notwithstanding aforementioned complexities, organizational representatives must comprehensively accommodate multidimensional institutional ramifications arising from aforementioned considerations.';
+    const article = content.blocks.find((b) => b.type === 'article')!;
+    if (article.type === 'article') {
+      article.markdown = hardText;
+    }
+    const result = validateLessonContent({
+      content,
+      dossierSourceUrls: DOSSIER_SOURCE_URLS,
+      ageBand: '13_15',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes('FK grade') && e.includes('worst sentences'))).toBe(true);
+  });
+
+  it('skips readability check when ageBand is undefined', () => {
+    const content = makeValidContent();
+    // Even if the article is complex, no ageBand = no readability check
+    const result = validateLessonContent({
+      content,
+      dossierSourceUrls: DOSSIER_SOURCE_URLS,
+    });
+    expect(result.errors.filter((e) => e.includes('FK grade'))).toHaveLength(0);
+  });
+});
+
+// ── alias scan ───────────────────────────────────────────────────────────────
+
+describe('validateLessonContent — glossary alias scan', () => {
+  it('fails when a forbidden alias of a promoted term appears in article text', () => {
+    const content = makeValidContent();
+    // "variable" is promoted; "var" is an alias that appears in article markdown
+    const article = content.blocks.find((b) => b.type === 'article')!;
+    if (article.type === 'article') {
+      article.markdown =
+        'A var stores a value under a name. The var can hold any value. ' +
+        'Variables let you track data. This is a named container.';
+    }
+    const result = validateLessonContent({
+      content,
+      dossierSourceUrls: DOSSIER_SOURCE_URLS,
+      glossaryAvoidAliases: [{ term: 'variable', aliases: ['var'] }],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes('var') && e.includes('variable'))).toBe(true);
+  });
+
+  it('is case-insensitive in alias matching', () => {
+    const content = makeValidContent();
+    const article = content.blocks.find((b) => b.type === 'article')!;
+    if (article.type === 'article') {
+      article.markdown = 'A Var is used to store values in many programs. Named containers are better.';
+    }
+    const result = validateLessonContent({
+      content,
+      dossierSourceUrls: DOSSIER_SOURCE_URLS,
+      glossaryAvoidAliases: [{ term: 'variable', aliases: ['var'] }],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes('var'))).toBe(true);
+  });
+
+  it('uses whole-word matching (does not flag "variable" when alias is "var")', () => {
+    const content = makeValidContent();
+    // "variable" contains "var" but only as a substring, not a whole word
+    const result = validateLessonContent({
+      content,
+      dossierSourceUrls: DOSSIER_SOURCE_URLS,
+      glossaryAvoidAliases: [{ term: 'variable', aliases: ['var'] }],
+    });
+    // "variable" should NOT be flagged for alias "var" (whole-word match)
+    expect(result.errors.filter((e) => e.includes('"var"'))).toHaveLength(0);
+  });
+
+  it('passes when no aliases appear in content', () => {
+    const content = makeValidContent();
+    const result = validateLessonContent({
+      content,
+      dossierSourceUrls: DOSSIER_SOURCE_URLS,
+      glossaryAvoidAliases: [{ term: 'variable', aliases: ['identifier', 'binding'] }],
+    });
+    // The fixture content does not contain "identifier" or "binding"
+    expect(result.errors.filter((e) => e.includes('identifier') || e.includes('binding'))).toHaveLength(0);
+  });
+
+  it('also scans quiz item text for aliases', () => {
+    const content = makeValidContent();
+    const quiz = content.blocks.find((b) => b.type === 'quiz')!;
+    if (quiz.type === 'quiz') {
+      quiz.items[0].question = 'What does a var do in programming?';
+    }
+    const result = validateLessonContent({
+      content,
+      dossierSourceUrls: DOSSIER_SOURCE_URLS,
+      glossaryAvoidAliases: [{ term: 'variable', aliases: ['var'] }],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes('var'))).toBe(true);
+  });
+
+  it('skips alias scan when glossaryAvoidAliases is empty', () => {
+    const content = makeValidContent();
+    const result = validateLessonContent({
+      content,
+      dossierSourceUrls: DOSSIER_SOURCE_URLS,
+      glossaryAvoidAliases: [],
+    });
+    expect(result.errors.filter((e) => e.includes('alias'))).toHaveLength(0);
+  });
+});

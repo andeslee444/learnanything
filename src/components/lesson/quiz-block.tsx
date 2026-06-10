@@ -28,6 +28,10 @@ export function QuizBlock({ lessonId, items, kind, label, onItemAnswered, onComp
   const [itemIndex, setItemIndex] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<ItemResult | null>(null);
+  // Track which option was chosen so we can highlight from the response.
+  // correctIndex is NOT present in the GET payload (stripped server-side) —
+  // highlight is driven by the response (correct boolean + chosen index only).
+  const [chosenIndex, setChosenIndex] = useState<number | null>(null);
   const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
 
@@ -49,6 +53,7 @@ export function QuizBlock({ lessonId, items, kind, label, onItemAnswered, onComp
 
   async function handleAnswer(item: QuizItem, answerIndex: number) {
     if (submitting || result !== null) return;
+    setChosenIndex(answerIndex);
     setSubmitting(true);
 
     try {
@@ -86,6 +91,7 @@ export function QuizBlock({ lessonId, items, kind, label, onItemAnswered, onComp
           if (!mountedRef.current) return;
           setItemIndex((i) => i + 1);
           setResult(null);
+          setChosenIndex(null);
           if (liveRef.current) liveRef.current.textContent = '';
         }, 1800);
       } else {
@@ -121,9 +127,13 @@ export function QuizBlock({ lessonId, items, kind, label, onItemAnswered, onComp
           let btnClass =
             'rounded-lg border px-4 py-3 text-left text-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400';
           if (result !== null) {
-            if (i === currentItem.correctIndex) {
-              btnClass += ' border-sky-400 bg-sky-100 text-sky-800 font-medium';
-            } else if (result !== null) {
+            if (i === chosenIndex) {
+              // Highlight the chosen option using the response: correct → sky, incorrect → red.
+              // correctIndex is NOT available client-side (stripped from GET).
+              btnClass += result.correct
+                ? ' border-sky-400 bg-sky-100 text-sky-800 font-medium'
+                : ' border-red-300 bg-red-50 text-red-700 font-medium';
+            } else {
               btnClass += ' border-ink-400/20 bg-white text-ink-400 cursor-not-allowed';
             }
           } else {
