@@ -3,6 +3,7 @@ import { cosineDistance } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as s from '@/db/schema';
 import { embedText } from './embeddings';
+import type { DossierContent } from './types';
 
 type Db = NodePgDatabase<typeof s>;
 
@@ -23,12 +24,8 @@ export function ttlForVertical(vertical: string, now = new Date()): Date {
 
 export type DossierKey = { vertical: string; topic: string; levelBand: 'novice' | 'developing' | 'competent' };
 
-export type DossierContent = {
-  sources: Array<{ url: string; title: string; publishedDate?: string }>;
-  claims: Array<{ claim: string; sourceUrls: string[] }>;
-  glossarySeeds: Array<{ term: string; definition: string }>;
-  misconceptions: string[];
-};
+// Re-export from shared types so consumers don't need a direct import cycle.
+export type { DossierContent } from './types';
 
 export async function findDossier(db: Db, key: DossierKey) {
   const embedding = await embedText(key.topic);

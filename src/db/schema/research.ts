@@ -1,5 +1,6 @@
 import { pgTable, text, timestamp, jsonb, uuid, pgEnum, vector, index, unique } from 'drizzle-orm/pg-core';
 import { expertiseBand } from './learners';
+import type { DossierSource, DossierClaim, DossierGlossarySeed } from '@/server/research/types';
 
 export const trustTier = pgEnum('trust_tier', ['tier1', 'tier2', 'tier3', 'blocked']);
 
@@ -12,10 +13,10 @@ export const topicDossiers = pgTable(
     levelBand: expertiseBand('level_band').notNull(),
     // 1536 dims = text-embedding-3-small; revisit when the embedding model is chosen in Phase 3.
     embedding: vector('embedding', { dimensions: 1536 }).notNull(),
-    sources: jsonb('sources').notNull().default([]),
-    claims: jsonb('claims').notNull().default([]),
-    glossarySeeds: jsonb('glossary_seeds').notNull().default([]),
-    misconceptions: jsonb('misconceptions').notNull().default([]),
+    sources: jsonb('sources').$type<DossierSource[]>().notNull().default([]),
+    claims: jsonb('claims').$type<DossierClaim[]>().notNull().default([]),
+    glossarySeeds: jsonb('glossary_seeds').$type<DossierGlossarySeed[]>().notNull().default([]),
+    misconceptions: jsonb('misconceptions').$type<string[]>().notNull().default([]),
     modelVersion: text('model_version'),
     ttlExpiresAt: timestamp('ttl_expires_at', { withTimezone: true }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

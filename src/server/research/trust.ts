@@ -42,8 +42,22 @@ const vetSchema = z.object({
 export type VettedSource = SearchSource & { trusted: boolean; trustReason: string };
 
 /**
+ * Normalize a URL to its canonical href form so trailing-slash/encoding variants
+ * compare equal. Falls back to the raw string if URL parsing fails.
+ */
+function safeHref(url: string): string {
+  try {
+    return new URL(url).href;
+  } catch {
+    return url;
+  }
+}
+
+/**
  * Layer 3 of the trust gate (spec §5): LLM-judge vetting for sources NOT on the allowlist.
  * Allowlisted sources are pre-trusted and must not be sent here (waste + risk of false negatives).
+ * The verdict map keys and lookups are normalized via safeHref so an LLM echoing a
+ * trailing-slash/encoding variant doesn't silently untrust a source.
  */
 export async function vetSources(sources: SearchSource[]): Promise<VettedSource[]> {
   if (sources.length === 0) return [];
@@ -57,9 +71,9 @@ export async function vetSources(sources: SearchSource[]): Promise<VettedSource[
       .map((src) => `<source url="${src.url}">\nTitle: ${src.title}\nExcerpt: ${src.text.slice(0, 500)}\n</source>`)
       .join('\n'),
   });
-  const byUrl = new Map(result.verdicts.map((v) => [v.url, v]));
+  const byUrl = new Map(result.verdicts.map((v) => [safeHref(v.url), v]));
   return sources.map((src) => {
-    const verdict = byUrl.get(src.url);
+    const verdict = byUrl.get(safeHref(src.url));
     return { ...src, trusted: verdict?.trusted ?? false, trustReason: verdict?.reason ?? 'no verdict returned' };
   });
 }
