@@ -44,12 +44,13 @@ describe('extractSource', () => {
 // ── synthesizeDossier citation guard ─────────────────────────────────────────
 
 describe('synthesizeDossier citation guard', () => {
-  // The 'synthesize-dossier' fixture returns two claims:
+  // The 'synthesize-dossier' fixture returns three claims:
   //   Claim A: sourceUrls: ['https://docs.python.org/3/tutorial/index.html']
   //   Claim B: sourceUrls: ['https://docs.python.org/3/tutorial/index.html', 'https://developer.mozilla.org/...']
+  //   Claim C: sourceUrls: ['https://realpython.com/command-line-interfaces-python-argparse/']
   //
   // By passing sources containing ONLY the MDN url, we exercise both behaviors:
-  //   - Claim A is dropped entirely (its only url is not in sources)
+  //   - Claims A and C are dropped entirely (their urls are not in sources)
   //   - Claim B keeps a subset of its sourceUrls (MDN survives; python.org is filtered out)
 
   const MDN_URL = 'https://developer.mozilla.org/en-US/docs/Learn/JavaScript/First_steps';
@@ -63,7 +64,7 @@ describe('synthesizeDossier citation guard', () => {
   };
 
   it('drops claims with no known sourceUrls and filters unknown urls from multi-source claims', async () => {
-    // sources contains only MDN — python.org is not known
+    // sources contains only MDN — python.org and realpython.com are not known
     const sources = [{ url: MDN_URL, title: 'MDN: JavaScript first steps' }];
     const result = await synthesizeDossier('variables', 'novice', [dummyExtraction], sources);
 
@@ -76,13 +77,19 @@ describe('synthesizeDossier citation guard', () => {
     expect(claimB).toBeDefined();
     expect(claimB!.sourceUrls).toEqual([MDN_URL]);
     expect(claimB!.sourceUrls).not.toContain(PYTHON_URL);
+
+    // Claim C ('Command-line tools parse arguments...') → only realpython.com → DROPPED
+    const claimC = result.claims.find((c) => c.claim === 'Command-line tools parse arguments and exit nonzero on errors.');
+    expect(claimC).toBeUndefined();
   });
 
   it('keeps claims whose sourceUrls are all known', async () => {
-    // sources contains both urls — both claims should survive with all their urls
+    // sources contains all three urls — all claims should survive with all their urls
+    const REALPYTHON_URL = 'https://realpython.com/command-line-interfaces-python-argparse/';
     const sources = [
       { url: PYTHON_URL, title: 'Python docs' },
       { url: MDN_URL, title: 'MDN' },
+      { url: REALPYTHON_URL, title: 'Real Python' },
     ];
     const result = await synthesizeDossier('variables', 'novice', [dummyExtraction], sources);
 
@@ -94,6 +101,10 @@ describe('synthesizeDossier citation guard', () => {
     expect(claimB).toBeDefined();
     expect(claimB!.sourceUrls).toContain(PYTHON_URL);
     expect(claimB!.sourceUrls).toContain(MDN_URL);
+
+    const claimC = result.claims.find((c) => c.claim === 'Command-line tools parse arguments and exit nonzero on errors.');
+    expect(claimC).toBeDefined();
+    expect(claimC!.sourceUrls).toEqual([REALPYTHON_URL]);
   });
 
   it('passes sources through to the result', async () => {

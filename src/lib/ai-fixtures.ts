@@ -70,6 +70,7 @@ export const fakeOutputs: Record<LlmPurpose, unknown> = {
     claims: [
       { claim: 'Variables store values under a name.', sourceUrls: ['https://docs.python.org/3/tutorial/index.html'] },
       { claim: 'Functions bundle reusable behavior.', sourceUrls: ['https://docs.python.org/3/tutorial/index.html', 'https://developer.mozilla.org/en-US/docs/Learn/JavaScript/First_steps'] },
+      { claim: 'Command-line tools parse arguments and exit nonzero on errors.', sourceUrls: ['https://realpython.com/command-line-interfaces-python-argparse/'] },
     ],
     glossarySeeds: [{ term: 'variable', definition: 'A named container for a value.' }],
     misconceptions: ['Variables contain values rather than referencing them.'],
