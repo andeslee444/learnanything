@@ -11,6 +11,8 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@emnapi/core": "^1.11.0",
+    "@emnapi/runtime": "^1.11.0",
     "ai": "^6.0.199",
     "better-auth": "^1.6.15",
     "drizzle-orm": "^0.45.2",
