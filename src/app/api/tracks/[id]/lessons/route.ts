@@ -56,7 +56,17 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
   }
 
   // C1: start with catch to mark lesson failed rather than orphaning it.
-  start(generateLessonWorkflow, [lesson.id]).catch(async (err) => {
+  // Persist runId in zpdSnapshot so the stream route can look it up later.
+  start(generateLessonWorkflow, [lesson.id]).then(async (run) => {
+    try {
+      await db
+        .update(s.lessons)
+        .set({ zpdSnapshot: { ...(lesson.zpdSnapshot as Record<string, unknown> ?? {}), workflowRunId: run.runId } })
+        .where(eq(s.lessons.id, lesson.id));
+    } catch (err) {
+      console.error('failed to persist workflowRunId', err);
+    }
+  }).catch(async (err) => {
     console.error('workflow start failed', err);
     await failLessonSafely(db, lesson.id, 'generation error — try again');
   });
