@@ -84,6 +84,7 @@ export function InterviewStepper({ topic, vertical }: Props) {
   const [cardNotes, setCardNotes] = useState('');
   const [cardPrior, setCardPrior] = useState('');
   const [cardScope, setCardScope] = useState<string[]>([]);
+  const [cardScopeInput, setCardScopeInput] = useState('');
 
   // ── async state ──────────────────────────────────────────────
   const [thinking, setThinking] = useState(false);
@@ -187,13 +188,18 @@ export function InterviewStepper({ topic, vertical }: Props) {
     setSubmitBusy(true);
     setSubmitError(null);
 
+    const filteredCriteria = cardCriteria.filter((c) => c.trim().length >= 3);
+    if (filteredCriteria.length === 0) {
+      setSubmitError('Add at least one success criterion of a few words.');
+      setSubmitBusy(false);
+      return;
+    }
+
     const payload: CreateTrackInput = {
       topic,
       vertical,
       whyText: cardWhy || effectiveWhy(),
-      successCriteria: cardCriteria
-        .filter((c) => c.trim().length >= 3)
-        .map((c) => ({ description: c.trim() })),
+      successCriteria: filteredCriteria.map((c) => ({ description: c.trim() })),
       constraints: {
         timePerWeek: cardTimePerWeek || undefined,
         deadline: cardDeadline || undefined,
@@ -354,7 +360,7 @@ export function InterviewStepper({ topic, vertical }: Props) {
           <button
             type="button"
             data-testid="interview-next"
-            disabled={successCriteria.every((c) => !c.trim())}
+            disabled={!successCriteria.some((c) => c.trim().length >= 3)}
             onClick={() => setStep('constraints')}
             className="rounded-md bg-sky-600 px-6 py-2 font-medium text-white disabled:opacity-50"
           >
@@ -612,17 +618,39 @@ export function InterviewStepper({ topic, vertical }: Props) {
           {/* Out of scope */}
           <div>
             <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-400">Out of scope</p>
-            {cardScope.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
+            {cardScope.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-2">
                 {cardScope.map((tag) => (
-                  <span key={tag} className="rounded-md bg-ink-400/10 px-3 py-1 text-sm text-ink-900">
-                    {tag}
-                  </span>
+                  <button
+                    key={tag}
+                    type="button"
+                    aria-label={`Remove ${tag}`}
+                    onClick={() => setCardScope(cardScope.filter((t) => t !== tag))}
+                    className="flex items-center gap-1 rounded-md bg-ink-400/10 px-3 py-1 text-sm text-ink-900 hover:bg-ink-400/20"
+                  >
+                    {tag} <span aria-hidden="true">✕</span>
+                  </button>
                 ))}
               </div>
-            ) : (
-              <p className="text-sm text-ink-400">None</p>
             )}
+            <input
+              aria-label="Add out-of-scope topic"
+              data-testid="card-scope-input"
+              className="w-full rounded-md border border-ink-400/40 bg-cloud p-3 text-ink-900 placeholder:text-ink-400 focus:outline-none focus:ring-2 focus:ring-sky-400"
+              placeholder="Type a topic and press Enter"
+              value={cardScopeInput}
+              onChange={(e) => setCardScopeInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  const val = cardScopeInput.trim();
+                  if (val.length >= 2 && !cardScope.includes(val)) {
+                    setCardScope([...cardScope, val]);
+                  }
+                  setCardScopeInput('');
+                }
+              }}
+            />
           </div>
         </div>
 
