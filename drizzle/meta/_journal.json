@@ -29,6 +29,13 @@
       "when": 1781067075623,
       "tag": "0003_updated-at-triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1781067468836,
+      "tag": "0004_lessons",
+      "breakpoints": true
     }
   ]
 }

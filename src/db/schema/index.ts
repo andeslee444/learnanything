@@ -3,3 +3,4 @@ export * from './learners';
 export * from './records';
 export * from './missions';
 export * from './knowledge';
+export * from './lessons';
