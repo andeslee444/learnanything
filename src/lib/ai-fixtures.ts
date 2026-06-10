@@ -50,4 +50,31 @@ export const fakeOutputs: Record<LlmPurpose, unknown> = {
       },
     ],
   },
+  'vet-sources': {
+    verdicts: [
+      { url: 'https://docs.python.org/3/tutorial/index.html', trusted: true, reason: 'official documentation' },
+      { url: 'https://developer.mozilla.org/en-US/docs/Learn/JavaScript/First_steps', trusted: true, reason: 'recognized reference' },
+      { url: 'https://realpython.com/command-line-interfaces-python-argparse/', trusted: true, reason: 'reputable editorial site' },
+      { url: 'https://content-farm.example/listicle', trusted: false, reason: 'content farm' },
+    ],
+  },
+  'extract-source': {
+    claims: [
+      { claim: 'Variables store values under a name.', quote: 'Variables store values under a name.' },
+      { claim: 'Functions let you reuse logic.', quote: 'Functions are defined with def and let you reuse logic.' },
+    ],
+    glossarySeeds: [{ term: 'variable', definition: 'A named container for a value.' }],
+    misconceptions: ['Variables contain values rather than referencing them.'],
+  },
+  'synthesize-dossier': {
+    claims: [
+      { claim: 'Variables store values under a name.', sourceUrls: ['https://docs.python.org/3/tutorial/index.html'] },
+      { claim: 'Functions bundle reusable behavior.', sourceUrls: ['https://docs.python.org/3/tutorial/index.html', 'https://developer.mozilla.org/en-US/docs/Learn/JavaScript/First_steps'] },
+      { claim: 'Command-line tools parse arguments and exit nonzero on errors.', sourceUrls: ['https://realpython.com/command-line-interfaces-python-argparse/'] },
+      { claim: 'Loops repeat work without copy-pasting code.', sourceUrls: ['https://developer.mozilla.org/en-US/docs/Learn/JavaScript/First_steps'] },
+    ],
+    glossarySeeds: [{ term: 'variable', definition: 'A named container for a value.' }],
+    misconceptions: ['Variables contain values rather than referencing them.'],
+  },
+  moderation: { allowed: true, reason: 'educational topic' },
 };
