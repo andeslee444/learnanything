@@ -1,3 +1,5 @@
+import Link from 'next/link';
+
 export default function Home() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-sky-100 via-sky-50 to-cloud px-6">
@@ -7,8 +9,13 @@ export default function Home() {
       <p className="mt-6 max-w-md text-center text-lg text-ink-600">
         One small, beautiful lesson at a time — grounded in real sources, shaped around why you want to learn.
       </p>
-      <div className="mt-10 rounded-xl bg-sun-100 px-4 py-2 text-sm text-sun-700">
-        Phase 1 foundation — onboarding arrives in Phase 2
+      <div className="mt-10 flex gap-4">
+        <Link href="/signup" className="rounded-xl bg-sky-600 px-6 py-3 font-medium text-white">
+          Start learning
+        </Link>
+        <Link href="/login" className="rounded-xl border border-sky-300 px-6 py-3 font-medium text-sky-700">
+          Log in
+        </Link>
       </div>
     </main>
   );
