@@ -50,6 +50,13 @@
       "when": 1781067793130,
       "tag": "0006_lessons-updated-at-triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1781067938295,
+      "tag": "0007_reviews",
+      "breakpoints": true
     }
   ]
 }
