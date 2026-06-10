@@ -98,6 +98,44 @@ describe('validateLessonContent — missing quiz', () => {
     expect(result.ok).toBe(false);
     expect(result.errors).toContain('no graded interactive block in body');
   });
+
+  it('passes "no graded interactive block" check when only a worked_example is present (no quiz)', () => {
+    const content = makeValidContent();
+    // Replace the quiz block with a worked_example
+    content.blocks = content.blocks
+      .filter((b) => b.type !== 'quiz')
+      .concat([
+        {
+          type: 'worked_example',
+          problem: 'Store then update a count: start at 5, then change it to 7.',
+          steps: [
+            { text: 'Write `count = 5` to create the variable.' },
+            { text: 'Write `count = 7` to overwrite the value.' },
+          ],
+          completionItem: {
+            id: 'we-test-1',
+            question: 'After `count = 5` then `count = 7`, what does `count` hold?',
+            options: ['count holds 7', 'count holds 5', 'count holds 12', 'count is undefined'],
+            correctIndex: 0,
+            explanation: 'Assignment overwrites the previous value — count now holds 7.',
+          },
+        },
+      ]);
+    const result = validateLessonContent({ content, dossierSourceUrls: DOSSIER_SOURCE_URLS });
+    // Should NOT have "no graded interactive block in body"
+    expect(result.errors).not.toContain('no graded interactive block in body');
+    // Should still pass overall (the base content has article + citations)
+    expect(result.ok).toBe(true);
+  });
+
+  it('fails when NEITHER quiz NOR worked_example blocks are present', () => {
+    const content = makeValidContent();
+    content.blocks = content.blocks.filter((b) => b.type !== 'quiz');
+    // Ensure no worked_example either (makeValidContent only has quiz blocks, so just filtering is enough)
+    const result = validateLessonContent({ content, dossierSourceUrls: DOSSIER_SOURCE_URLS });
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain('no graded interactive block in body');
+  });
 });
 
 // ── unresolvable citations ────────────────────────────────────────────────────
@@ -182,6 +220,186 @@ describe('validateLessonContent — character budget', () => {
     const result = validateLessonContent({ content, dossierSourceUrls: DOSSIER_SOURCE_URLS });
     // Should only fail on citation URL resolution for the replaced markdown, not the budget
     expect(result.errors.some((e) => e.includes('exceeds the 5-15 minute budget proxy'))).toBe(false);
+  });
+});
+
+// ── flashcardDeckSchema bounds ────────────────────────────────────────────────
+
+describe('flashcardDeckSchema — bounds', () => {
+  it('accepts a valid flashcard_deck with 2 cards (min)', async () => {
+    const { flashcardDeckSchema } = await import('./blocks');
+    const result = flashcardDeckSchema.safeParse({
+      type: 'flashcard_deck',
+      cards: [
+        { front: 'What is a variable?', back: 'A named container for a value.' },
+        { front: 'What does assignment do?', back: 'It stores a value in a variable.' },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects flashcard_deck with fewer than 2 cards', async () => {
+    const { flashcardDeckSchema } = await import('./blocks');
+    const result = flashcardDeckSchema.safeParse({
+      type: 'flashcard_deck',
+      cards: [{ front: 'Q', back: 'A' }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects flashcard_deck with more than 12 cards', async () => {
+    const { flashcardDeckSchema } = await import('./blocks');
+    const result = flashcardDeckSchema.safeParse({
+      type: 'flashcard_deck',
+      cards: Array.from({ length: 13 }, (_, i) => ({
+        front: `Q${i + 1}`,
+        back: `A${i + 1}`,
+      })),
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a card with an empty front string', async () => {
+    const { flashcardDeckSchema } = await import('./blocks');
+    const result = flashcardDeckSchema.safeParse({
+      type: 'flashcard_deck',
+      cards: [
+        { front: '', back: 'A named container for a value.' },
+        { front: 'Q2', back: 'A2' },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a card front exceeding 300 chars', async () => {
+    const { flashcardDeckSchema } = await import('./blocks');
+    const result = flashcardDeckSchema.safeParse({
+      type: 'flashcard_deck',
+      cards: [
+        { front: 'x'.repeat(301), back: 'back text' },
+        { front: 'Q2', back: 'A2' },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a card back exceeding 500 chars', async () => {
+    const { flashcardDeckSchema } = await import('./blocks');
+    const result = flashcardDeckSchema.safeParse({
+      type: 'flashcard_deck',
+      cards: [
+        { front: 'front text', back: 'x'.repeat(501) },
+        { front: 'Q2', back: 'A2' },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+// ── workedExampleSchema bounds ────────────────────────────────────────────────
+
+describe('workedExampleSchema — bounds', () => {
+  function makeValidWorkedExample() {
+    return {
+      type: 'worked_example' as const,
+      problem: 'Store then update a count.',
+      steps: [
+        { text: 'Write `count = 5` to create the variable.' },
+        { text: 'Write `count = 7` to overwrite the value.' },
+      ],
+      completionItem: {
+        id: 'we1',
+        question: 'After `count = 5` then `count = 7`, what does `count` hold?',
+        options: ['count holds 7', 'count holds 5', 'count holds 12', 'count is undefined'],
+        correctIndex: 0,
+        explanation: 'Assignment overwrites the previous value — count now holds 7.',
+      },
+    };
+  }
+
+  it('accepts a valid worked_example', async () => {
+    const { workedExampleSchema } = await import('./blocks');
+    const result = workedExampleSchema.safeParse(makeValidWorkedExample());
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects worked_example with fewer than 2 steps', async () => {
+    const { workedExampleSchema } = await import('./blocks');
+    const data = makeValidWorkedExample();
+    data.steps = [{ text: 'Only one step here.' }];
+    const result = workedExampleSchema.safeParse(data);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects worked_example with more than 8 steps', async () => {
+    const { workedExampleSchema } = await import('./blocks');
+    const data = makeValidWorkedExample();
+    data.steps = Array.from({ length: 9 }, (_, i) => ({ text: `Step ${i + 1} has some text here.` }));
+    const result = workedExampleSchema.safeParse(data);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects worked_example with a problem shorter than 8 chars', async () => {
+    const { workedExampleSchema } = await import('./blocks');
+    const data = makeValidWorkedExample();
+    data.problem = 'Short';
+    const result = workedExampleSchema.safeParse(data);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects worked_example with a problem exceeding 600 chars', async () => {
+    const { workedExampleSchema } = await import('./blocks');
+    const data = makeValidWorkedExample();
+    data.problem = 'x'.repeat(601);
+    const result = workedExampleSchema.safeParse(data);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a step with text shorter than 8 chars', async () => {
+    const { workedExampleSchema } = await import('./blocks');
+    const data = makeValidWorkedExample();
+    data.steps = [{ text: 'Short' }, { text: 'Valid step text here.' }];
+    const result = workedExampleSchema.safeParse(data);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects worked_example without a completionItem', async () => {
+    const { workedExampleSchema } = await import('./blocks');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data: any = { ...makeValidWorkedExample() };
+    delete data.completionItem;
+    const result = workedExampleSchema.safeParse(data);
+    expect(result.success).toBe(false);
+  });
+});
+
+// ── worked_example completionItem id included in duplicate-id check ───────────
+
+describe('validateLessonContent — worked_example completionItem id deduplication', () => {
+  it('fails with "duplicate quiz item ids" when worked_example completionItem id collides with a win-check id', () => {
+    const content = makeValidContent();
+    content.blocks = content.blocks
+      .filter((b) => b.type !== 'quiz')
+      .concat([
+        {
+          type: 'worked_example',
+          problem: 'Store then update a count.',
+          steps: [
+            { text: 'Write `count = 5` to create the variable.' },
+            { text: 'Write `count = 7` to overwrite the value.' },
+          ],
+          completionItem: {
+            id: 'wc1', // collides with win-check item id
+            question: 'After `count = 5` then `count = 7`, what does `count` hold?',
+            options: ['count holds 7', 'count holds 5', 'count holds 12', 'count is undefined'],
+            correctIndex: 0,
+            explanation: 'Assignment overwrites the previous value.',
+          },
+        },
+      ]);
+    const result = validateLessonContent({ content, dossierSourceUrls: DOSSIER_SOURCE_URLS });
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain('duplicate quiz item ids');
   });
 });
 

@@ -7,6 +7,8 @@ import type { ProgressEvent, ProgressStage } from '@/workflows/generate-lesson';
 import { ArticleSection } from '@/components/lesson/article-section';
 import { GlossaryCallout } from '@/components/lesson/glossary-callout';
 import { QuizBlock } from '@/components/lesson/quiz-block';
+import { FlashcardDeck } from '@/components/lesson/flashcard-deck';
+import { WorkedExample } from '@/components/lesson/worked-example';
 import { WinCheck } from '@/components/lesson/win-check';
 
 type LessonContent = {
@@ -158,6 +160,19 @@ function LessonReady({ lessonId, trackId, data }: LessonReadyProps) {
               lessonId={lessonId}
               items={block.items}
               kind="quiz"
+              liveRef={liveRef}
+            />
+          );
+        }
+        if (block.type === 'flashcard_deck') {
+          return <FlashcardDeck key={idx} block={block} />;
+        }
+        if (block.type === 'worked_example') {
+          return (
+            <WorkedExample
+              key={idx}
+              lessonId={lessonId}
+              block={block}
               liveRef={liveRef}
             />
           );

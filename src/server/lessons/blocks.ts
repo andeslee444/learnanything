@@ -24,10 +24,22 @@ export const quizBlockSchema = z.object({
   type: z.literal('quiz'),
   items: z.array(quizItemSchema).min(1).max(4),
 });
+export const flashcardDeckSchema = z.object({
+  type: z.literal('flashcard_deck'),
+  cards: z.array(z.object({ front: z.string().min(1).max(300), back: z.string().min(1).max(500) })).min(2).max(12),
+});
+export const workedExampleSchema = z.object({
+  type: z.literal('worked_example'),
+  problem: z.string().min(8).max(600),
+  steps: z.array(z.object({ text: z.string().min(8).max(500) })).min(2).max(8),
+  completionItem: quizItemSchema, // graded finish — keeps "≥1 graded interactive" semantics per block
+});
 export const lessonBlockSchema = z.discriminatedUnion('type', [
   articleBlockSchema,
   glossaryCalloutSchema,
   quizBlockSchema,
+  flashcardDeckSchema,
+  workedExampleSchema,
 ]);
 export type LessonBlock = z.infer<typeof lessonBlockSchema>;
 
@@ -50,7 +62,7 @@ export const lessonPlanSchema = z.object({
   blockOutline: z
     .array(
       z.object({
-        type: z.enum(['article', 'glossary_callout', 'quiz']),
+        type: z.enum(['article', 'glossary_callout', 'quiz', 'flashcard_deck', 'worked_example']),
         focus: z.string().min(3).max(200),
       }),
     )

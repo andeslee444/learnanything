@@ -12,7 +12,9 @@ export function validateLessonContent(input: LessonValidationInput): { ok: boole
   const known = new Set(input.dossierSourceUrls);
 
   if (!blocks.some((b) => b.type === 'article')) errors.push('no article block');
-  if (!blocks.some((b) => b.type === 'quiz')) errors.push('no graded interactive block in body'); // spec §2 step 4
+  // A "graded interactive" block is a quiz block OR a worked_example (which contains a completionItem).
+  if (!blocks.some((b) => b.type === 'quiz' || b.type === 'worked_example'))
+    errors.push('no graded interactive block in body'); // spec §2 step 4
   for (const block of blocks) {
     if (block.type === 'article') {
       const resolved = block.citationUrls.filter((u) => known.has(u));
@@ -31,7 +33,11 @@ export function validateLessonContent(input: LessonValidationInput): { ok: boole
 
 function allItemIds(blocks: LessonBlock[], winItems: { id: string }[]): string[] {
   return [
-    ...blocks.flatMap((b) => (b.type === 'quiz' ? b.items.map((i) => i.id) : [])),
+    ...blocks.flatMap((b) => {
+      if (b.type === 'quiz') return b.items.map((i) => i.id);
+      if (b.type === 'worked_example') return [b.completionItem.id];
+      return [];
+    }),
     ...winItems.map((i) => i.id),
   ];
 }
