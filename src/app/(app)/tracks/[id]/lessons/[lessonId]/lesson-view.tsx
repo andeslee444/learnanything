@@ -9,6 +9,7 @@ import { GlossaryCallout } from '@/components/lesson/glossary-callout';
 import { QuizBlock } from '@/components/lesson/quiz-block';
 import { FlashcardDeck } from '@/components/lesson/flashcard-deck';
 import { WorkedExample } from '@/components/lesson/worked-example';
+import { AnimatedDiagram } from '@/components/lesson/animated-diagram';
 import { WinCheck } from '@/components/lesson/win-check';
 
 type LessonContent = {
@@ -176,6 +177,9 @@ function LessonReady({ lessonId, trackId, data }: LessonReadyProps) {
               liveRef={liveRef}
             />
           );
+        }
+        if (block.type === 'animated_diagram') {
+          return <AnimatedDiagram key={idx} block={block} />;
         }
         return null;
       })}

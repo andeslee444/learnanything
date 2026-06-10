@@ -38,7 +38,8 @@ export async function generateBlocks(
     schema: generatorOutputSchema,
     modelOverride: opts?.modelOverride,
     system: `You write the blocks for ONE short lesson from a research dossier.
-Allowed block types: article, glossary_callout, quiz, flashcard_deck, worked_example.
+Allowed block types: article, glossary_callout, quiz, flashcard_deck, worked_example, animated_diagram.
+For animated_diagram: emit ONLY parameterized primitives (box/circle/arrow/label shapes with percentage coords) — never markup. Arrow shapes require toX and toY. Label shapes require text.
 HARD RULES: every factual statement must be supported by a dossier claim; every article block's
 citationUrls must come from the dossier's source urls; never invent sources or facts beyond the claims;
 quiz, worked_example.completionItem, and win-check items test the lesson's single objective;

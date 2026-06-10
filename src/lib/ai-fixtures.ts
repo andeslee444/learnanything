@@ -141,6 +141,25 @@ export const fakeOutputs: Record<LlmPurpose, unknown> = {
           explanation: 'Assignment overwrites the previous value — count now holds 7.',
         },
       },
+      {
+        type: 'animated_diagram',
+        title: 'Assignment flow: how a value moves into a variable',
+        shapes: [
+          { id: 'value-box', kind: 'box', x: 5, y: 20, w: 22, h: 14, text: 'value: 5' },
+          { id: 'assign-arrow', kind: 'arrow', x: 28, y: 27, toX: 48, toY: 27 },
+          { id: 'var-box', kind: 'box', x: 49, y: 20, w: 28, h: 14, text: 'count = ?' },
+        ],
+        steps: [
+          {
+            highlightIds: ['value-box'],
+            caption: 'Start with the value 5 on the right-hand side of the assignment.',
+          },
+          {
+            highlightIds: ['assign-arrow', 'var-box'],
+            caption: 'The assignment operator copies 5 into the variable count — count now holds 5.',
+          },
+        ],
+      },
     ],
     winCheck: {
       items: [

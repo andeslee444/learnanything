@@ -28,6 +28,38 @@ export function validateLessonContent(input: LessonValidationInput): { ok: boole
   if (totalChars > 9000)
     errors.push(`article text ${totalChars} chars exceeds the 5-15 minute budget proxy (9000)`);
 
+  // ── AnimatedDiagram structural validators ────────────────────────────────────
+  for (const block of blocks) {
+    if (block.type === 'animated_diagram') {
+      const shapeIds = new Set(block.shapes.map((s) => s.id));
+      // All highlightIds must reference a known shape id
+      for (let stepIdx = 0; stepIdx < block.steps.length; stepIdx++) {
+        const step = block.steps[stepIdx];
+        for (const hid of step.highlightIds) {
+          if (!shapeIds.has(hid)) {
+            errors.push(
+              `animated_diagram "${block.title}" step ${stepIdx + 1} highlightId "${hid}" does not match any shape id`,
+            );
+          }
+        }
+      }
+      // Arrows require toX and toY
+      for (const shape of block.shapes) {
+        if (shape.kind === 'arrow' && (shape.toX === undefined || shape.toY === undefined)) {
+          errors.push(
+            `animated_diagram "${block.title}" shape "${shape.id}" is an arrow but is missing toX or toY`,
+          );
+        }
+        // Labels require text
+        if (shape.kind === 'label' && !shape.text) {
+          errors.push(
+            `animated_diagram "${block.title}" shape "${shape.id}" is a label but is missing text`,
+          );
+        }
+      }
+    }
+  }
+
   return { ok: errors.length === 0, errors };
 }
 

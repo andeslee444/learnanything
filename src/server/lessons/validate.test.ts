@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { validateLessonContent } from './validate';
 import type { LessonValidationInput } from './validate';
+import type { animatedDiagramSchema } from './blocks';
+import type { z } from 'zod';
+
+type AnimatedDiagramBlock = z.infer<typeof animatedDiagramSchema>;
 
 // Source URLs from the synthesize-dossier fixture (ai-fixtures.ts)
 const DOSSIER_SOURCE_URLS = [
@@ -400,6 +404,188 @@ describe('validateLessonContent — worked_example completionItem id deduplicati
     const result = validateLessonContent({ content, dossierSourceUrls: DOSSIER_SOURCE_URLS });
     expect(result.ok).toBe(false);
     expect(result.errors).toContain('duplicate quiz item ids');
+  });
+});
+
+// ── animatedDiagramSchema bounds ─────────────────────────────────────────────
+
+describe('animatedDiagramSchema — bounds', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function makeValidDiagram(): any {
+    return {
+      type: 'animated_diagram',
+      title: 'Assignment flow',
+      shapes: [
+        { id: 'box-a', kind: 'box', x: 5, y: 20, w: 20, h: 12, text: 'value: 5' },
+        { id: 'arr', kind: 'arrow', x: 26, y: 26, toX: 46, toY: 26 },
+        { id: 'box-b', kind: 'box', x: 47, y: 20, w: 22, h: 12, text: 'count' },
+      ],
+      steps: [
+        { highlightIds: ['box-a'], caption: 'Start with the value on the right.' },
+        { highlightIds: ['arr', 'box-b'], caption: 'Assignment copies the value into count.' },
+      ],
+    };
+  }
+
+  it('accepts a valid animated_diagram', async () => {
+    const { animatedDiagramSchema } = await import('./blocks');
+    const result = animatedDiagramSchema.safeParse(makeValidDiagram());
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects animated_diagram with fewer than 2 shapes', async () => {
+    const { animatedDiagramSchema } = await import('./blocks');
+    const data = makeValidDiagram();
+    data.shapes = [{ id: 'box-a', kind: 'box', x: 5, y: 20, w: 20, h: 12, text: 'only one' }];
+    const result = animatedDiagramSchema.safeParse(data);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects animated_diagram with more than 20 shapes', async () => {
+    const { animatedDiagramSchema } = await import('./blocks');
+    const data = makeValidDiagram();
+    data.shapes = Array.from({ length: 21 }, (_, i) => ({
+      id: `s${i}`,
+      kind: 'box' as const,
+      x: i * 4,
+      y: 20,
+      w: 10,
+      h: 8,
+    }));
+    const result = animatedDiagramSchema.safeParse(data);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects animated_diagram with fewer than 2 steps', async () => {
+    const { animatedDiagramSchema } = await import('./blocks');
+    const data = makeValidDiagram();
+    data.steps = [{ highlightIds: ['box-a'], caption: 'Only one step provided here.' }];
+    const result = animatedDiagramSchema.safeParse(data);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a step with an empty highlightIds array', async () => {
+    const { animatedDiagramSchema } = await import('./blocks');
+    const data = makeValidDiagram();
+    data.steps[0] = { highlightIds: [], caption: 'No highlights but should fail.' };
+    const result = animatedDiagramSchema.safeParse(data);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a step with a caption shorter than 8 chars', async () => {
+    const { animatedDiagramSchema } = await import('./blocks');
+    const data = makeValidDiagram();
+    data.steps[0] = { highlightIds: ['box-a'], caption: 'Short' };
+    const result = animatedDiagramSchema.safeParse(data);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a shape text exceeding 60 chars', async () => {
+    const { animatedDiagramSchema } = await import('./blocks');
+    const data = makeValidDiagram();
+    data.shapes[0] = { ...data.shapes[0], text: 'x'.repeat(61) };
+    const result = animatedDiagramSchema.safeParse(data);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a shape id exceeding 40 chars', async () => {
+    const { animatedDiagramSchema } = await import('./blocks');
+    const data = makeValidDiagram();
+    data.shapes[0] = { ...data.shapes[0], id: 'x'.repeat(41) };
+    const result = animatedDiagramSchema.safeParse(data);
+    expect(result.success).toBe(false);
+  });
+});
+
+// ── validate.ts: animated_diagram structural rules ───────────────────────────
+
+describe('validateLessonContent — animated_diagram rules', () => {
+  // Reuse makeValidContent from top but swap in a diagram block
+  function makeContentWithDiagram(diagramOverride?: Partial<AnimatedDiagramBlock>) {
+    const base = makeValidContent();
+    const diagram: AnimatedDiagramBlock = {
+      type: 'animated_diagram',
+      title: 'Assignment flow',
+      shapes: [
+        { id: 'box-a', kind: 'box', x: 5, y: 20, w: 20, h: 12, text: 'value: 5' },
+        { id: 'arr', kind: 'arrow', x: 26, y: 26, toX: 46, toY: 26 },
+        { id: 'box-b', kind: 'box', x: 47, y: 20, w: 22, h: 12, text: 'count' },
+      ],
+      steps: [
+        { highlightIds: ['box-a'], caption: 'Start with the value on the right.' },
+        { highlightIds: ['arr', 'box-b'], caption: 'Assignment copies the value into count.' },
+      ],
+      ...diagramOverride,
+    };
+    base.blocks = [...base.blocks, diagram];
+    return base;
+  }
+
+  it('passes when all highlightIds reference known shape ids', () => {
+    const result = validateLessonContent({
+      content: makeContentWithDiagram(),
+      dossierSourceUrls: DOSSIER_SOURCE_URLS,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('fails when a step has a highlightId that does not match any shape id', () => {
+    const content = makeContentWithDiagram({
+      steps: [
+        { highlightIds: ['box-a'], caption: 'Start with the value on the right.' },
+        { highlightIds: ['UNKNOWN-ID'], caption: 'This highlight id does not exist here.' },
+      ],
+    });
+    const result = validateLessonContent({ content, dossierSourceUrls: DOSSIER_SOURCE_URLS });
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes('UNKNOWN-ID'))).toBe(true);
+    expect(result.errors.some((e) => e.includes('does not match any shape id'))).toBe(true);
+  });
+
+  it('fails when an arrow shape is missing toX', () => {
+    const shapes: AnimatedDiagramBlock['shapes'] = [
+      { id: 'box-a', kind: 'box', x: 5, y: 20, w: 20, h: 12, text: 'value' },
+      // arrow missing toX and toY — satisfies zod schema (optional) but validator rejects it
+      { id: 'arr', kind: 'arrow', x: 26, y: 26 },
+      { id: 'box-b', kind: 'box', x: 47, y: 20, w: 22, h: 12, text: 'count' },
+    ];
+    const content = makeContentWithDiagram({ shapes });
+    const result = validateLessonContent({ content, dossierSourceUrls: DOSSIER_SOURCE_URLS });
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes('arrow') && e.includes('missing toX or toY'))).toBe(true);
+  });
+
+  it('fails when a label shape is missing text', () => {
+    const shapes: AnimatedDiagramBlock['shapes'] = [
+      { id: 'box-a', kind: 'box', x: 5, y: 20, w: 20, h: 12, text: 'value' },
+      // label without text — satisfies zod schema (optional) but validator rejects it
+      { id: 'lbl', kind: 'label', x: 30, y: 10 },
+      { id: 'box-b', kind: 'box', x: 47, y: 20, w: 22, h: 12, text: 'count' },
+    ];
+    const content = makeContentWithDiagram({
+      shapes,
+      steps: [
+        { highlightIds: ['box-a'], caption: 'Start with the value on the right.' },
+        { highlightIds: ['lbl', 'box-b'], caption: 'Label highlights reference known shapes.' },
+      ],
+    });
+    const result = validateLessonContent({ content, dossierSourceUrls: DOSSIER_SOURCE_URLS });
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes('label') && e.includes('missing text'))).toBe(true);
+  });
+
+  it('passes when a box shape has no text (text is optional for box)', () => {
+    const shapes: AnimatedDiagramBlock['shapes'] = [
+      // box without text — should be fine
+      { id: 'box-a', kind: 'box', x: 5, y: 20, w: 20, h: 12 },
+      { id: 'arr', kind: 'arrow', x: 26, y: 26, toX: 46, toY: 26 },
+      { id: 'box-b', kind: 'box', x: 47, y: 20, w: 22, h: 12 },
+    ];
+    const content = makeContentWithDiagram({ shapes });
+    const result = validateLessonContent({ content, dossierSourceUrls: DOSSIER_SOURCE_URLS });
+    // No diagram-related errors
+    expect(result.errors.some((e) => e.includes('animated_diagram'))).toBe(false);
   });
 });
 
