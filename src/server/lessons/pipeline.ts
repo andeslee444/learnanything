@@ -220,8 +220,10 @@ export async function runLessonStage(stage: 'plan' | 'research' | 'generate' | '
  * Uses CAS (WHERE status = 'generating') via failLesson so a concurrent delivery
  * that wins the race is safe.
  *
- * `olderThanMs` is injectable so tests can pass 0 (or negative) to qualify
- * freshly-created rows without having to manipulate the DB clock.
+ * `olderThanMs` is injectable so tests can pass a negative value (cutoff in the
+ * future) to qualify freshly-created rows without manipulating the DB clock.
+ * (0 is racy: a row's updated_at = Postgres now() can be >= a cutoff computed
+ * from JS Date.now() in the same millisecond.)
  * Production callers use the default of 15 minutes.
  */
 export async function sweepStaleLessons(

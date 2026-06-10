@@ -198,8 +198,10 @@ describe('sweepStaleLessons — integration', () => {
     const holdId = await placeHold(testDb, userId, lesson.id);
     expect(holdId).toBeTruthy();
 
-    // Pass olderThanMs = 0 (or negative) so the freshly-created row qualifies
-    const result = await sweepStaleLessons(testDb, trackId, 0);
+    // Negative olderThanMs → cutoff 1s in the future, so the freshly-created row
+    // always qualifies. (0 is racy: the row's updated_at = Postgres now() can be
+    // >= a cutoff computed from JS Date.now() in the same millisecond.)
+    const result = await sweepStaleLessons(testDb, trackId, -1000);
     expect(result.swept).toBe(1);
 
     const [row] = await testDb.select().from(s.lessons).where(eq(s.lessons.id, lesson.id));
@@ -222,7 +224,7 @@ describe('sweepStaleLessons — integration', () => {
       .values({ trackId, seq: 1, spec: {}, status: 'ready' })
       .returning();
 
-    const result = await sweepStaleLessons(testDb, trackId, 0);
+    const result = await sweepStaleLessons(testDb, trackId, -1000);
     expect(result.swept).toBe(0);
 
     const [row] = await testDb.select().from(s.lessons).where(eq(s.lessons.id, lesson.id));
@@ -257,8 +259,8 @@ describe('sweepStaleLessons — integration', () => {
         { trackId: trackB, seq: 1, spec: {}, status: 'generating' },
       ]);
 
-    // Sweep only trackA
-    const result = await sweepStaleLessons(testDb, trackA, 0);
+    // Sweep only trackA (negative threshold so fresh rows qualify without racing the clock)
+    const result = await sweepStaleLessons(testDb, trackA, -1000);
     expect(result.swept).toBe(1);
 
     // trackB lesson should still be generating
@@ -279,9 +281,10 @@ describe('sweepStaleLessons — integration', () => {
 
     // NOTE: The updatedAt trigger sets NEW.updated_at = now() on every UPDATE,
     // so we cannot backdate it via a normal UPDATE. Instead the sweeper accepts an
-    // injectable olderThanMs=0 threshold so even freshly-created rows qualify.
+    // injectable negative olderThanMs (cutoff 1s in the future) so even
+    // freshly-created rows qualify without racing the clock.
     // This verifies the cutoff condition works correctly.
-    const result = await sweepStaleLessons(testDb, trackId, 0);
+    const result = await sweepStaleLessons(testDb, trackId, -1000);
     expect(result.swept).toBe(1);
 
     const [row] = await testDb.select().from(s.lessons).where(eq(s.lessons.id, lesson.id));
@@ -304,8 +307,8 @@ describe('sweepStaleLessons — integration', () => {
       .values({ trackId: trackGen, seq: 1, spec: {}, status: 'generating' })
       .returning();
 
-    // Sweep trackGen — only the generating lesson qualifies
-    const result = await sweepStaleLessons(testDb, trackGen, 0);
+    // Sweep trackGen — only the generating lesson qualifies (negative threshold avoids clock race)
+    const result = await sweepStaleLessons(testDb, trackGen, -1000);
     expect(result.swept).toBe(1);
 
     const [genRow] = await testDb.select().from(s.lessons).where(eq(s.lessons.id, genLesson.id));
