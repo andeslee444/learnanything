@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "seed:trust": "tsx scripts/seed-trust-domains.ts",
-    "research:smoke": "tsx scripts/research-smoke.ts"
+    "research:smoke": "tsx scripts/research-smoke.ts",
+    "evals": "tsx evals/run-evals.ts"
   },
   "dependencies": {
     "ai": "^6.0.199",

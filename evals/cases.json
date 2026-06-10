@@ -1,0 +1,12 @@
+[
+  { "id": "prog-novice-vars", "vertical": "programming", "topic": "Python variables for beginners", "levelBand": "novice" },
+  { "id": "prog-novice-loops", "vertical": "programming", "topic": "Loops in Python", "levelBand": "novice" },
+  { "id": "prog-dev-functions", "vertical": "programming", "topic": "Writing reusable functions", "levelBand": "developing" },
+  { "id": "prog-dev-errors", "vertical": "programming", "topic": "Handling errors gracefully", "levelBand": "developing" },
+  { "id": "prog-comp-cli", "vertical": "programming", "topic": "Building a command-line tool", "levelBand": "competent" },
+  { "id": "hist-novice-ww1", "vertical": "history", "topic": "Causes of World War One", "levelBand": "novice" },
+  { "id": "hist-novice-rome", "vertical": "history", "topic": "Daily life in ancient Rome", "levelBand": "novice" },
+  { "id": "hist-dev-printing", "vertical": "history", "topic": "How the printing press changed Europe", "levelBand": "developing" },
+  { "id": "hist-dev-silkroad", "vertical": "history", "topic": "Trade along the Silk Road", "levelBand": "developing" },
+  { "id": "hist-comp-sources", "vertical": "history", "topic": "Evaluating primary sources", "levelBand": "competent" }
+]
