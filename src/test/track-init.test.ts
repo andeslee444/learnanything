@@ -26,7 +26,9 @@ describe('track initialization (fake LLM)', () => {
     expect(result.status).toBe('initialized');
     if (result.status !== 'initialized') return;
     expect(result.nodeCount).toBe(10);
-    expect(result.quiz.items.length).toBeGreaterThanOrEqual(2);
+    // Fix 8: quiz is non-null in fake mode (fixture always returns the quiz).
+    expect(result.quiz).not.toBeNull();
+    expect(result.quiz!.items.length).toBeGreaterThanOrEqual(2);
     const nodes = await testDb.select().from(s.skillNodes).where(eq(s.skillNodes.trackId, trackId));
     expect(nodes).toHaveLength(10);
     const edges = await testDb.select().from(s.skillNodeEdges);
@@ -50,5 +52,27 @@ describe('track initialization (fake LLM)', () => {
     expect(result.status).toBe('failed');
     const nodes = await testDb.select().from(s.skillNodes).where(eq(s.skillNodes.trackId, track.id));
     expect(nodes).toHaveLength(0); // nothing persisted on failure
+  });
+
+  // Fix 9: concurrency test — the row lock inside the transaction must ensure
+  // exactly one winner even when two calls fire simultaneously.
+  it('concurrent initialization persists exactly one graph', async () => {
+    const [u] = await testDb.insert(s.user).values({ id: crypto.randomUUID(), name: 'Conc', email: 'conc@t.dev' }).returning();
+    const [learner] = await testDb.insert(s.learners).values({ userId: u.id, displayName: 'Conc', ageBand: '18_plus' }).returning();
+    const track = await createTrackWithMission(testDb, learner.id, {
+      topic: 'Python CLI tools', vertical: 'programming', whyText: 'ship a CLI',
+      successCriteria: [{ description: 'CLI my team uses' }], constraints: {}, outOfScope: [],
+    });
+
+    const [r1, r2] = await Promise.all([
+      initializeTrack(testDb, track.id),
+      initializeTrack(testDb, track.id),
+    ]);
+
+    const statuses = [r1.status, r2.status].sort();
+    expect(statuses).toEqual(['already_initialized', 'initialized']);
+
+    const nodes = await testDb.select().from(s.skillNodes).where(eq(s.skillNodes.trackId, track.id));
+    expect(nodes).toHaveLength(10);
   });
 });

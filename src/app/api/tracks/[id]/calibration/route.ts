@@ -25,7 +25,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const learner = await getLearnerByUserId(db, session.user.id);
   if (!learner) return NextResponse.json({ error: 'no learner profile' }, { status: 403 });
   if (!(await getTrackDetail(db, id, learner.id))) return NextResponse.json({ error: 'not found' }, { status: 404 });
-  const parsed = bodySchema.safeParse(await req.json());
+
+  // Fix 7: guard malformed request body.
+  let rawBody: unknown;
+  try {
+    rawBody = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'invalid json' }, { status: 400 });
+  }
+  const parsed = bodySchema.safeParse(rawBody);
   if (!parsed.success) return NextResponse.json({ error: 'invalid body' }, { status: 400 });
 
   const { item, answerIndex } = parsed.data;
