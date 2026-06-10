@@ -71,6 +71,20 @@
       "when": 1781068314591,
       "tag": "0009_reserved-updated-at-triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1781068442483,
+      "tag": "0010_enable-pgvector",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1781068464024,
+      "tag": "0011_research",
+      "breakpoints": true
     }
   ]
 }
