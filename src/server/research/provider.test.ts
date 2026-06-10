@@ -3,7 +3,10 @@ import { ExaProvider } from './exa-provider';
 import { FakeProvider } from './fake-provider';
 import { ResearchProviderError } from './provider';
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 describe('ExaProvider', () => {
   it('sends the verified request shape and maps results', async () => {
@@ -36,6 +39,7 @@ describe('ExaProvider', () => {
   });
 
   it('requires a key outside fake mode', () => {
+    vi.stubEnv('EXA_API_KEY', '');
     expect(() => new ExaProvider(undefined)).toThrow(ResearchProviderError);
   });
 });
