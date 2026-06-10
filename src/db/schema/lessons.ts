@@ -1,5 +1,5 @@
 import { pgTable, text, timestamp, jsonb, integer, real, boolean, uuid, pgEnum, uniqueIndex, index } from 'drizzle-orm/pg-core';
-import { tracks, learners } from './learners.js';
+import { tracks, learners } from './learners';
 
 export const lessonStatus = pgEnum('lesson_status', ['generating', 'queued', 'ready', 'failed', 'needs_review']);
 export const verificationStatus = pgEnum('verification_status', ['pending', 'verified', 'issues']);
