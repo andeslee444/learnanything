@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "ai": "^6.0.199",
     "better-auth": "^1.6.15",
     "drizzle-orm": "^0.45.2",
     "next": "16.2.9",
