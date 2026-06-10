@@ -17,9 +17,10 @@ describe('better-auth signup', () => {
   afterAll(() => testPool.end());
 
   it('creates a user row on email signup', async () => {
-    await testAuth.api.signUpEmail({
+    const result = await testAuth.api.signUpEmail({
       body: { name: 'Test Learner', email: 'test@example.com', password: 'a-strong-password-123' },
     });
+    expect(result.user.email).toBe('test@example.com');
     const rows = await testDb
       .select()
       .from(schema.user)
