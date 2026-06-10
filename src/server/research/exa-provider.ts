@@ -15,6 +15,7 @@ export class ExaProvider implements ResearchProvider {
 
   async search(opts: SearchOptions): Promise<SearchSource[]> {
     const res = await fetch(EXA_URL, {
+      signal: AbortSignal.timeout(15_000),
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': this.apiKey },
       body: JSON.stringify({
@@ -32,7 +33,7 @@ export class ExaProvider implements ResearchProvider {
     const data = (await res.json()) as {
       results: Array<{ title?: string; url: string; text?: string; publishedDate?: string; author?: string }>;
     };
-    return data.results
+    return (data.results ?? [])
       .filter((r) => r.url && (r.text ?? '').trim().length > 0)
       .map((r) => ({
         title: r.title ?? r.url,
