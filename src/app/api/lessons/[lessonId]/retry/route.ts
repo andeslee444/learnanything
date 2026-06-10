@@ -33,27 +33,38 @@ export async function POST(_req: Request, ctx: { params: Promise<{ lessonId: str
     return NextResponse.json({ error: 'lesson_not_failed' }, { status: 409 });
   }
 
-  // Credit lifecycle: grant → new hold (402 on insufficient).
-  await ensureMonthlyGrant(db, session.user.id);
+  // Credit lifecycle + workflow start. Any error other than InsufficientCreditsError
+  // reverts the CAS flip so the lesson is not orphaned in 'generating' state.
   try {
-    await placeHold(db, session.user.id, lessonId);
-  } catch (err) {
-    if (err instanceof InsufficientCreditsError) {
-      // Revert the CAS flip so the lesson remains retryable.
-      await db
-        .update(s.lessons)
-        .set({ status: 'failed' })
-        .where(and(eq(s.lessons.id, lessonId), eq(s.lessons.status, 'generating')));
-      return NextResponse.json({ error: 'credits' }, { status: 402 });
+    await ensureMonthlyGrant(db, session.user.id);
+    try {
+      await placeHold(db, session.user.id, lessonId);
+    } catch (err) {
+      if (err instanceof InsufficientCreditsError) {
+        // Revert the CAS flip so the lesson remains retryable.
+        await db
+          .update(s.lessons)
+          .set({ status: 'failed' })
+          .where(and(eq(s.lessons.id, lessonId), eq(s.lessons.status, 'generating')));
+        return NextResponse.json({ error: 'credits' }, { status: 402 });
+      }
+      throw err;
     }
+
+    // C1: start with catch to mark lesson failed rather than orphaning it.
+    start(generateLessonWorkflow, [lessonId]).catch(async (err) => {
+      console.error('workflow start failed', err);
+      await failLessonSafely(db, lessonId, 'generation error — try again');
+    });
+  } catch (err) {
+    // Non-credit error: revert the CAS flip so the lesson doesn't sit orphaned
+    // in 'generating' state — mirrors the orphan cleanup in the create route.
+    await db
+      .update(s.lessons)
+      .set({ status: 'failed' })
+      .where(and(eq(s.lessons.id, lessonId), eq(s.lessons.status, 'generating')));
     throw err;
   }
-
-  // C1: start with catch to mark lesson failed rather than orphaning it.
-  start(generateLessonWorkflow, [lessonId]).catch(async (err) => {
-    console.error('workflow start failed', err);
-    await failLessonSafely(db, lessonId, 'generation error — try again');
-  });
 
   return NextResponse.json({ lessonId });
 }

@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import type { LessonBlock, QuizItem } from '@/server/lessons/blocks';
 import type { LessonPlan } from '@/server/lessons/blocks';
 import { ArticleSection } from '@/components/lesson/article-section';
@@ -140,10 +139,10 @@ function LessonReady({ lessonId, trackId, data }: LessonReadyProps) {
 
 type LessonFailedProps = Props & {
   reason?: string;
+  onRetried: () => void;
 };
 
-function LessonFailed({ lessonId, reason }: LessonFailedProps) {
-  const router = useRouter();
+function LessonFailed({ lessonId, reason, onRetried }: LessonFailedProps) {
   const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -163,8 +162,9 @@ function LessonFailed({ lessonId, reason }: LessonFailedProps) {
         setRetrying(false);
         return;
       }
-      // Retry started — navigate to the lesson page which will show generating state
-      router.refresh();
+      // Retry started — hand off to LessonView by transitioning to 'generating'
+      // so the existing poll loop takes over. No router.refresh() needed here.
+      onRetried();
     } catch {
       setError('Network error — please check your connection.');
       setRetrying(false);
@@ -288,6 +288,7 @@ export function LessonView({ lessonId, trackId }: Props) {
         lessonId={lessonId}
         trackId={trackId}
         reason={data.failureReason}
+        onRetried={() => setData({ status: 'generating', spec: data.spec ?? {} })}
       />
     );
   }
