@@ -3,6 +3,9 @@ import { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
 import * as schema from '@/db/schema';
 
+// Each test file that imports testPool MUST call afterAll(() => testPool.end())
+// to avoid open-handle warnings. Vitest isolates modules per file, so each
+// file gets its own Pool instance.
 export const testPool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 export const testDb = drizzle(testPool, { schema });
 
@@ -12,9 +15,9 @@ export async function resetDb() {
     SELECT tablename FROM pg_tables
     WHERE schemaname = 'public' AND tablename NOT LIKE '__drizzle%'
   `);
-  for (const row of tables.rows as { tablename: string }[]) {
-    await testDb.execute(
-      sql.raw(`TRUNCATE TABLE "${row.tablename}" RESTART IDENTITY CASCADE`)
-    );
-  }
+  if (tables.rows.length === 0) return;
+  const names = (tables.rows as { tablename: string }[])
+    .map((r) => `"${r.tablename}"`)
+    .join(', ');
+  await testDb.execute(sql.raw(`TRUNCATE TABLE ${names} RESTART IDENTITY CASCADE`));
 }
