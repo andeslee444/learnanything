@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+@theme {
+  /* ── Clear blue skies ─────────────────────────────────────── */
+  --color-sky-50: #f2f9ff;
+  --color-sky-100: #e3f2fe;
+  --color-sky-200: #bfe3fd;
+  --color-sky-300: #8fcdfb;
+  --color-sky-400: #54aef5;
+  --color-sky-500: #2b8fe8;
+  --color-sky-600: #1a71c6;
+  --color-sky-700: #175aa0;
+  --color-sky-800: #184c84;
+  --color-sky-900: #19406d;
+
+  /* Warm sun accent — wins, mastery, celebration */
+  --color-sun-100: #fff3d6;
+  --color-sun-300: #ffd98a;
+  --color-sun-500: #f5b53f;
+  --color-sun-700: #b97f14;
+
+  /* Neutral ink on warm white */
+  --color-cloud: #fdfdfc;
+  --color-ink-900: #1d2733;
+  --color-ink-600: #4a5868;
+  --color-ink-400: #8a97a6;
+
+  --font-sans: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+
+  --radius-md: 0.625rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
+}
+
+html {
+  background: var(--color-cloud);
+  color: var(--color-ink-900);
+}
+
+/* Spec §6: reduced motion is a hard, global rule — not per-component opt-in. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

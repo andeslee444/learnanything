@@ -1,0 +1,3 @@
+ALTER TABLE "credit_ledger" ADD CONSTRAINT "credit_ledger_related_entry_id_credit_ledger_id_fk" FOREIGN KEY ("related_entry_id") REFERENCES "public"."credit_ledger"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "credit_ledger_one_settle_per_hold" ON "credit_ledger" USING btree ("related_entry_id") WHERE "credit_ledger"."related_entry_id" IS NOT NULL;--> statement-breakpoint
+ALTER TABLE "credit_ledger" ADD CONSTRAINT "credit_ledger_amount_by_type" CHECK (("credit_ledger"."entry_type" = 'hold' AND "credit_ledger"."amount" = -1) OR ("credit_ledger"."entry_type" = 'capture' AND "credit_ledger"."amount" = 0) OR ("credit_ledger"."entry_type" IN ('grant', 'purchase', 'refund') AND "credit_ledger"."amount" > 0));

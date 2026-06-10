@@ -1,0 +1,19 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: learnanything
+      POSTGRES_PASSWORD: learnanything
+      POSTGRES_DB: learnanything
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U learnanything"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+volumes:
+  pgdata:

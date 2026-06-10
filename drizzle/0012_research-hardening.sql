@@ -1,0 +1,2 @@
+ALTER TABLE "topic_dossiers" ADD COLUMN "updated_at" timestamp with time zone DEFAULT now() NOT NULL;--> statement-breakpoint
+CREATE INDEX "topic_dossiers_vertical_band_ttl" ON "topic_dossiers" USING btree ("vertical","level_band","ttl_expires_at");
