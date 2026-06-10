@@ -13,7 +13,7 @@ export const articleBlockSchema = z.object({
   type: z.literal('article'),
   heading: z.string().min(3).max(120),
   markdown: z.string().min(50).max(7000),
-  citationUrls: z.array(z.string()).min(1), // validator resolves against dossier sources
+  citationUrls: z.array(z.string()).min(1).max(10), // validator resolves against dossier sources
 });
 export const glossaryCalloutSchema = z.object({
   type: z.literal('glossary_callout'),
