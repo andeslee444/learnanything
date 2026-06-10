@@ -7,6 +7,7 @@ export default defineConfig({
     globalSetup: './src/test/global-setup.ts',
     setupFiles: ['dotenv/config'],
     fileParallelism: false, // tests share one Postgres database
+    exclude: ['e2e/**', 'node_modules/**'],
   },
   resolve: {
     alias: { '@': path.resolve(__dirname, './src') },
