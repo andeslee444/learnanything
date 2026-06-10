@@ -17,7 +17,9 @@ export type LlmPurpose =
   | 'vet-sources'
   | 'extract-source'
   | 'synthesize-dossier'
-  | 'moderation';
+  | 'moderation'
+  | 'plan-lesson'
+  | 'generate-lesson';
 
 /**
  * Single entry point for structured LLM calls.
