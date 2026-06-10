@@ -48,7 +48,7 @@ export function LessonSection({ trackId, lessons, hasNodes }: Props) {
   const showStartButton = hasNodes && !hasGenerating;
 
   async function handleStart() {
-    if (startState.kind === 'starting') return;
+    if (startState.kind === 'starting' || startState.kind === 'already_generating') return;
     setStartState({ kind: 'starting' });
 
     try {
@@ -107,13 +107,13 @@ export function LessonSection({ trackId, lessons, hasNodes }: Props) {
                 >
                   {STATUS_LABELS[lesson.status] ?? lesson.status}
                 </span>
-                {(lesson.status === 'ready' || lesson.status === 'generating') && (
+                {(lesson.status === 'ready' || lesson.status === 'generating' || lesson.status === 'failed') && (
                   <Link
                     href={`/tracks/${trackId}/lessons/${lesson.id}`}
                     className="text-xs text-sky-600 hover:text-sky-700 underline underline-offset-2"
                     aria-label={`Open lesson ${lesson.seq}`}
                   >
-                    {lesson.status === 'generating' ? 'View' : 'Open'}
+                    {lesson.status === 'generating' ? 'View' : lesson.status === 'failed' ? 'Retry' : 'Open'}
                   </Link>
                 )}
               </div>
@@ -155,7 +155,7 @@ export function LessonSection({ trackId, lessons, hasNodes }: Props) {
         <button
           data-testid="start-lesson"
           onClick={handleStart}
-          disabled={startState.kind === 'starting'}
+          disabled={startState.kind === 'starting' || startState.kind === 'already_generating'}
           className="mt-4 rounded-lg bg-sky-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
           aria-label="Start a new lesson"
         >

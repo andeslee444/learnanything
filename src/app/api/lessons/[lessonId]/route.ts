@@ -19,6 +19,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ lessonId: stri
   const [track] = await db.select().from(s.tracks).where(eq(s.tracks.id, lesson.trackId));
   if (!track || track.learnerId !== learner.id) return NextResponse.json({ error: 'not found' }, { status: 404 });
 
+  // TODO(phase-4b): strip correctIndex from content before sending — the answer key is readable in the network tab; requires the post-answer highlight to rely on the attempts response alone.
   const content = lesson.status === 'ready' ? lesson.content : undefined;
   const failureReason =
     lesson.status === 'failed' && lesson.content && typeof lesson.content === 'object'

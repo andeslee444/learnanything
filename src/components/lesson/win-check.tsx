@@ -86,7 +86,14 @@ export function WinCheck({ lessonId, items, objective, trackId, liveRef }: Props
         return;
       }
 
-      if (winCheckResult && winCheckResult.answered >= winCheckResult.total && winCheckResult.passed === false) {
+      // Transition to failed phase when: server says answered>=total+not passed,
+      // OR we are already on the last item and the response lacks passed:true.
+      // The functional updater reads current itemIndex safely from the closure snapshot.
+      const isLastItem = state.itemIndex >= items.length - 1;
+      if (
+        (winCheckResult && winCheckResult.answered >= winCheckResult.total && winCheckResult.passed === false) ||
+        (isLastItem && !winCheckResult?.passed)
+      ) {
         advanceTimerRef.current = setTimeout(() => {
           if (!mountedRef.current) return;
           setState({ phase: 'failed' });
@@ -95,19 +102,20 @@ export function WinCheck({ lessonId, items, objective, trackId, liveRef }: Props
         return;
       }
 
-      // Advance to next item if not finished
-      if (state.itemIndex < items.length - 1) {
-        advanceTimerRef.current = setTimeout(() => {
-          if (!mountedRef.current) return;
-          setState({
+      // Advance to next item — use functional updater so itemIndex is never stale.
+      advanceTimerRef.current = setTimeout(() => {
+        if (!mountedRef.current) return;
+        setState((prev) => {
+          if (prev.phase !== 'answering') return prev;
+          return {
             phase: 'answering',
-            itemIndex: state.itemIndex + 1,
+            itemIndex: prev.itemIndex + 1,
             result: null,
             submitting: false,
-          });
-          if (liveRef.current) liveRef.current.textContent = '';
-        }, 1800);
-      }
+          };
+        });
+        if (liveRef.current) liveRef.current.textContent = '';
+      }, 1800);
     } catch {
       if (!mountedRef.current) return;
       setState((prev) => (prev.phase === 'answering' ? { ...prev, submitting: false } : prev));

@@ -36,40 +36,9 @@ type Props = {
   trackId: string;
 };
 
-// Split into two components to follow hooks-rules-safe pattern (no conditional hooks).
-function LessonGenerating({ lessonId, trackId }: Props) {
-  const router = useRouter();
-  const [msgIndex, setMsgIndex] = useState(0);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const mountedRef = useRef(true);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    intervalRef.current = setInterval(() => {
-      setMsgIndex((i) => (i + 1) % GENERATING_MESSAGES.length);
-    }, 2500);
-
-    const pollInterval = setInterval(async () => {
-      if (!mountedRef.current) return;
-      try {
-        const res = await fetch(`/api/lessons/${lessonId}`);
-        if (!res.ok) return;
-        const data = (await res.json()) as LessonData;
-        if (data.status === 'ready' || data.status === 'failed') {
-          router.refresh();
-        }
-      } catch {
-        // ignore poll errors
-      }
-    }, 2500);
-
-    return () => {
-      mountedRef.current = false;
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      clearInterval(pollInterval);
-    };
-  }, [lessonId, router, trackId]);
-
+// Generating spinner — display only. Polling is owned by LessonView.
+type LessonGeneratingProps = { msgIndex: number };
+function LessonGenerating({ msgIndex }: LessonGeneratingProps) {
   return (
     <div
       data-testid="lesson-generating"
@@ -225,16 +194,17 @@ function LessonFailed({ lessonId, reason }: LessonFailedProps) {
   );
 }
 
-// Main exported component — hooks-rules-safe: splits into sub-components per status.
+// Main exported component — owns the poll interval while status==='generating'.
+// The interval is cleared as soon as setData transitions to a non-generating status
+// (or on unmount), so no stale polling continues after the lesson is ready.
 export function LessonView({ lessonId, trackId }: Props) {
   const [data, setData] = useState<LessonData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const mountedRef = useRef(true);
+  const [msgIndex, setMsgIndex] = useState(0);
 
+  // Initial fetch
   useEffect(() => {
-    mountedRef.current = true;
     let active = true;
-
     async function load() {
       try {
         const res = await fetch(`/api/lessons/${lessonId}`);
@@ -244,19 +214,50 @@ export function LessonView({ lessonId, trackId }: Props) {
           return;
         }
         const json = (await res.json()) as LessonData;
-        setData(json);
+        if (active) setData(json);
       } catch {
         if (!active) return;
         setLoadError('Network error — please check your connection.');
       }
     }
-
     load();
+    return () => { active = false; };
+  }, [lessonId]);
+
+  // Poll only while status === 'generating'. Interval is cleared when status
+  // transitions to ready/failed (setData called) or when the component unmounts.
+  useEffect(() => {
+    if (!data || data.status !== 'generating') return;
+
+    let active = true;
+
+    const msgTimer = setInterval(() => {
+      setMsgIndex((i) => (i + 1) % GENERATING_MESSAGES.length);
+    }, 2500);
+
+    const pollTimer = setInterval(async () => {
+      if (!active) return;
+      try {
+        const res = await fetch(`/api/lessons/${lessonId}`);
+        if (!active || !res.ok) return;
+        const json = (await res.json()) as LessonData;
+        if (!active) return;
+        if (json.status !== 'generating') {
+          // Transition out — setData will cause a re-render; this effect will
+          // not re-run for 'generating' so both intervals are cleaned up below.
+          setData(json);
+        }
+      } catch {
+        // ignore transient poll errors
+      }
+    }, 2500);
+
     return () => {
       active = false;
-      mountedRef.current = false;
+      clearInterval(msgTimer);
+      clearInterval(pollTimer);
     };
-  }, [lessonId]);
+  }, [lessonId, data?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loadError) {
     return (
@@ -278,7 +279,7 @@ export function LessonView({ lessonId, trackId }: Props) {
   }
 
   if (data.status === 'generating') {
-    return <LessonGenerating lessonId={lessonId} trackId={trackId} />;
+    return <LessonGenerating msgIndex={msgIndex} />;
   }
 
   if (data.status === 'failed') {
