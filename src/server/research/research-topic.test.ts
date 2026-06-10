@@ -196,7 +196,7 @@ describe('researchTopic — dropped-source citability', () => {
     const modModule = await import('@/server/moderation');
     let contentCallCount = 0;
     const spy = vi.spyOn(modModule, 'moderateText').mockImplementation(
-      async (_text: string, context: 'learning_request' | 'retrieved_content') => {
+      async (_text: string, context: 'learning_request' | 'retrieved_content' | 'assembled_lesson') => {
         if (context === 'retrieved_content') {
           contentCallCount++;
           // Block only the FIRST extracted source (docs.python.org).
