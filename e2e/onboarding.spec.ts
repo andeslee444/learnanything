@@ -132,8 +132,59 @@ test('signup → mission interview → learning map → calibration → lesson j
   // Use .first() to resolve any strict mode conflict — the body quiz option appears before win-check.
   await page.getByRole('button', { name: 'Option 1: 3' }).click();
 
+  // ── 8b. FlashcardDeck — flip a card and navigate ─────────────
+  // Fixture flashcard_deck appears after the second article block (document order).
+  // 3 cards: variable/assignment/name.
+  // Interaction: flip card 1 → navigate to card 2 → assert counter changed.
+  await expect(page.getByTestId('flashcard-deck')).toBeVisible({ timeout: 10_000 });
+  // The deck starts on card 1 of 3 showing front face.
+  await expect(page.getByTestId('flashcard-deck')).toContainText('card 1 of 3');
+  // Flip the current card (click flashcard-flip button).
+  await page.getByTestId('flashcard-flip').click();
+  // After flip the back is visible — the 'Back' label appears.
+  await expect(page.getByTestId('flashcard-deck')).toContainText('Back');
+  // Navigate to the next card.
+  await page.getByTestId('flashcard-next').click();
+  // Counter should now show card 2 of 3.
+  await expect(page.getByTestId('flashcard-deck')).toContainText('card 2 of 3');
+
+  // ── 8c. WorkedExample — reveal steps + answer completion item ─
+  // Fixture worked_example: problem 'Store then update a count: start at 5, then change it to 7.'
+  // 3 steps; completionItem id 'we1'; correct option text 'count holds 7' (index 0).
+  // Completion item options use testid we-option-{i} (DISTINCT from quiz-option-{i}).
+  await expect(page.getByTestId('worked-example')).toBeVisible({ timeout: 10_000 });
+  // Reveal all 3 steps one at a time.
+  await page.getByTestId('we-show-next-step').click(); // reveals step 0
+  await expect(page.getByTestId('we-step-0')).toBeVisible({ timeout: 5_000 });
+  await page.getByTestId('we-show-next-step').click(); // reveals step 1
+  await expect(page.getByTestId('we-step-1')).toBeVisible({ timeout: 5_000 });
+  await page.getByTestId('we-show-next-step').click(); // reveals step 2
+  await expect(page.getByTestId('we-step-2')).toBeVisible({ timeout: 5_000 });
+  // All steps revealed → completion item appears.
+  // Correct option text: 'count holds 7' (index 0 → we-option-0).
+  await expect(page.getByTestId('we-option-0')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('we-option-0')).toContainText('count holds 7');
+  await page.getByTestId('we-option-0').click();
+
+  // ── 8d. AnimatedDiagram — step through both steps ────────────
+  // Fixture animated_diagram: 2 steps.
+  //   Step 1 caption: 'Start with the value 5 on the right-hand side of the assignment.'
+  //   Step 2 caption: 'The assignment operator copies 5 into the variable count — count now holds 5.'
+  // Interaction: assert initial caption → click diagram-step → assert caption changes.
+  await expect(page.getByTestId('animated-diagram')).toBeVisible({ timeout: 10_000 });
+  // Step 1 caption is visible initially (aria-live region).
+  await expect(page.getByTestId('animated-diagram')).toContainText(
+    'Start with the value 5 on the right-hand side of the assignment.'
+  );
+  // Advance to step 2.
+  await page.getByTestId('diagram-step').click();
+  // Caption changes to step 2 text.
+  await expect(page.getByTestId('animated-diagram')).toContainText(
+    'The assignment operator copies 5 into the variable count'
+  );
+
   // ── 9. Win-check: wc1 ────────────────────────────────────────
-  // After the body quiz q1 is answered, win-check is already rendered.
+  // After all body blocks are interacted with, win-check is already rendered.
   // wc1: 'What does a variable do?'
   // wc1 options: ['Stores a value under a name', 'Draws on screen', ...], correctIndex: 0
   await expect(page.getByTestId('win-check')).toBeVisible({ timeout: 10_000 });

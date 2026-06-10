@@ -7,6 +7,7 @@ import * as s from '@/db/schema';
 import { getLearnerByUserId } from '@/server/learners';
 import { getTrackDetail } from '@/server/tracks';
 import { hasCalibration } from '@/server/track-init';
+import { sweepStaleLessons } from '@/server/lessons/pipeline';
 import { TrackSetup } from './track-setup';
 import { LessonSection } from './lesson-section';
 
@@ -33,6 +34,9 @@ export default async function TrackDetailPage({ params }: { params: Promise<{ id
 
   const detail = await getTrackDetail(db, id, learner.id);
   if (!detail) notFound();
+
+  // Fire-and-forget: sweep stale 'generating' lessons so the UI never shows a zombie.
+  sweepStaleLessons(db, id).catch((err) => console.error('sweepStaleLessons error', err));
 
   const { track, mission, nodes } = detail;
 

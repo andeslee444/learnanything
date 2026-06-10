@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { start } from 'workflow/api';
@@ -52,7 +52,18 @@ export async function POST(_req: Request, ctx: { params: Promise<{ lessonId: str
     }
 
     // C1: start with catch to mark lesson failed rather than orphaning it.
-    start(generateLessonWorkflow, [lessonId]).catch(async (err) => {
+    // Persist runId in zpdSnapshot so the stream route can look it up later.
+    // Atomic jsonb merge avoids a read-merge-write race (no SELECT needed).
+    start(generateLessonWorkflow, [lessonId]).then(async (run) => {
+      try {
+        await db
+          .update(s.lessons)
+          .set({ zpdSnapshot: sql`zpd_snapshot || ${JSON.stringify({ workflowRunId: run.runId })}::jsonb` })
+          .where(eq(s.lessons.id, lessonId));
+      } catch (err) {
+        console.error('failed to persist workflowRunId on retry', err);
+      }
+    }).catch(async (err) => {
       console.error('workflow start failed', err);
       await failLessonSafely(db, lessonId, 'generation error — try again');
     });

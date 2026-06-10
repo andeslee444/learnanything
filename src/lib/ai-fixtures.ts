@@ -117,6 +117,49 @@ export const fakeOutputs: Record<LlmPurpose, unknown> = {
           'Names should say what the value MEANS: `user_count` beats `x`. Future-you reads code far more often than writes it, and clear names are the cheapest documentation there is. Most languages have conventions — follow what the codebase around you does.',
         citationUrls: ['https://developer.mozilla.org/en-US/docs/Learn/JavaScript/First_steps'],
       },
+      {
+        type: 'flashcard_deck',
+        cards: [
+          { front: 'What is a variable?', back: 'A named container that stores a value — like a labeled box.' },
+          { front: 'What does assignment do?', back: 'It puts a value into a variable: `count = 3` stores 3 in count.' },
+          { front: 'Why do good names matter?', back: 'Clear names act as cheap documentation — `user_count` beats `x`.' },
+        ],
+      },
+      {
+        type: 'worked_example',
+        problem: 'Store then update a count: start at 5, then change it to 7.',
+        steps: [
+          { text: 'Write `count = 5` — this creates a variable named count holding 5.' },
+          { text: 'Write `count = 7` — assignment replaces the stored value; count now holds 7.' },
+          { text: 'Read `count` — it returns 7, the most recently assigned value.' },
+        ],
+        completionItem: {
+          id: 'we1',
+          question: 'After `count = 5` then `count = 7`, what does `count` hold?',
+          options: ['count holds 7', 'count holds 5', 'count holds 12', 'count is undefined'],
+          correctIndex: 0,
+          explanation: 'Assignment overwrites the previous value — count now holds 7.',
+        },
+      },
+      {
+        type: 'animated_diagram',
+        title: 'Assignment flow: how a value moves into a variable',
+        shapes: [
+          { id: 'value-box', kind: 'box', x: 5, y: 20, w: 22, h: 14, text: 'value: 5' },
+          { id: 'assign-arrow', kind: 'arrow', x: 28, y: 27, toX: 48, toY: 27 },
+          { id: 'var-box', kind: 'box', x: 49, y: 20, w: 28, h: 14, text: 'count = ?' },
+        ],
+        steps: [
+          {
+            highlightIds: ['value-box'],
+            caption: 'Start with the value 5 on the right-hand side of the assignment.',
+          },
+          {
+            highlightIds: ['assign-arrow', 'var-box'],
+            caption: 'The assignment operator copies 5 into the variable count — count now holds 5.',
+          },
+        ],
+      },
     ],
     winCheck: {
       items: [

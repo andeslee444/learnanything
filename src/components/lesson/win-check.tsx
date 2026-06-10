@@ -11,7 +11,7 @@ type ItemResult = {
 };
 
 type WinCheckState =
-  | { phase: 'answering'; itemIndex: number; result: ItemResult | null; submitting: boolean }
+  | { phase: 'answering'; itemIndex: number; result: ItemResult | null; submitting: boolean; chosenIndex: number | null }
   | { phase: 'passed'; objective: string }
   | { phase: 'failed' };
 
@@ -29,6 +29,7 @@ export function WinCheck({ lessonId, items, objective, trackId, liveRef }: Props
     itemIndex: 0,
     result: null,
     submitting: false,
+    chosenIndex: null,
   });
   const mountedRef = useRef(true);
   const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -50,7 +51,7 @@ export function WinCheck({ lessonId, items, objective, trackId, liveRef }: Props
     if (state.phase !== 'answering') return;
     if (state.submitting || state.result !== null) return;
 
-    setState((prev) => (prev.phase === 'answering' ? { ...prev, submitting: true } : prev));
+    setState((prev) => (prev.phase === 'answering' ? { ...prev, submitting: true, chosenIndex: answerIndex } : prev));
 
     try {
       const res = await fetch(`/api/lessons/${lessonId}/attempts`, {
@@ -118,6 +119,7 @@ export function WinCheck({ lessonId, items, objective, trackId, liveRef }: Props
             itemIndex: prev.itemIndex + 1,
             result: null,
             submitting: false,
+            chosenIndex: null,
           };
         });
         if (liveRef.current) liveRef.current.textContent = '';
@@ -130,7 +132,7 @@ export function WinCheck({ lessonId, items, objective, trackId, liveRef }: Props
   }
 
   function handleRetry() {
-    setState({ phase: 'answering', itemIndex: 0, result: null, submitting: false });
+    setState({ phase: 'answering', itemIndex: 0, result: null, submitting: false, chosenIndex: null });
     if (liveRef.current) liveRef.current.textContent = '';
   }
 
@@ -209,8 +211,12 @@ export function WinCheck({ lessonId, items, objective, trackId, liveRef }: Props
           let btnClass =
             'rounded-lg border px-4 py-3 text-left text-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-sun-500';
           if (state.result !== null) {
-            if (i === currentItem.correctIndex) {
-              btnClass += ' border-sun-500 bg-sun-300/40 text-ink-900 font-medium';
+            if (i === state.chosenIndex) {
+              // Highlight the chosen option using the response: correct → sun, incorrect → red.
+              // correctIndex is NOT available client-side (stripped from GET).
+              btnClass += state.result.correct
+                ? ' border-sun-500 bg-sun-300/40 text-ink-900 font-medium'
+                : ' border-red-300 bg-red-50 text-red-700 font-medium';
             } else {
               btnClass += ' border-ink-400/20 bg-white text-ink-400 cursor-not-allowed';
             }

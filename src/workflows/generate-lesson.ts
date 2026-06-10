@@ -1,4 +1,19 @@
+import { getWritable } from 'workflow';
 import { runLessonStage } from '@/server/lessons/pipeline';
+
+export type ProgressStage = 'planned' | 'researched' | 'generating' | 'ready' | 'failed';
+export type ProgressEvent = { stage: ProgressStage; at: number };
+
+async function emitProgress(stage: ProgressStage) {
+  'use step';
+  const writable = getWritable<ProgressEvent>();
+  const writer = writable.getWriter();
+  try {
+    await writer.write({ stage, at: Date.now() });
+  } finally {
+    writer.releaseLock();
+  }
+}
 
 async function plan(lessonId: string) {
   'use step';
@@ -21,11 +36,18 @@ export async function generateLessonWorkflow(lessonId: string) {
   'use workflow';
   try {
     const planned = await plan(lessonId);
+    await emitProgress(planned.status === 'planned' ? 'planned' : 'failed');
     if (planned.status !== 'planned') return planned;
     const researched = await research(lessonId);
+    await emitProgress(researched.status === 'researched' ? 'researched' : 'failed');
     if (researched.status !== 'researched') return researched;
-    return generate(lessonId);
+    await emitProgress('generating');
+    const result = await generate(lessonId);
+    await emitProgress(result.status === 'ready' ? 'ready' : 'failed');
+    return result;
   } catch {
-    return markFailed(lessonId, 'generation error — try again');
+    const failed = await markFailed(lessonId, 'generation error — try again');
+    await emitProgress('failed');
+    return failed;
   }
 }

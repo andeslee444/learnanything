@@ -3,9 +3,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { LessonBlock, QuizItem } from '@/server/lessons/blocks';
 import type { LessonPlan } from '@/server/lessons/blocks';
+import type { ProgressEvent, ProgressStage } from '@/workflows/generate-lesson';
 import { ArticleSection } from '@/components/lesson/article-section';
 import { GlossaryCallout } from '@/components/lesson/glossary-callout';
 import { QuizBlock } from '@/components/lesson/quiz-block';
+import { FlashcardDeck } from '@/components/lesson/flashcard-deck';
+import { WorkedExample } from '@/components/lesson/worked-example';
+import { AnimatedDiagram } from '@/components/lesson/animated-diagram';
 import { WinCheck } from '@/components/lesson/win-check';
 
 type LessonContent = {
@@ -22,6 +26,14 @@ type LessonData = {
   failureReason?: string;
 };
 
+const STAGE_MESSAGES: Record<ProgressStage, string> = {
+  planned: 'Lesson planned — researching the topic…',
+  researched: 'Research complete — writing your content…',
+  generating: 'Writing your content…',
+  ready: 'Almost ready…',
+  failed: 'Something went wrong…',
+};
+
 const GENERATING_MESSAGES = [
   'Planning your lesson…',
   'Researching the topic…',
@@ -35,25 +47,58 @@ type Props = {
   trackId: string;
 };
 
-// Generating spinner — display only. Polling is owned by LessonView.
-type LessonGeneratingProps = { msgIndex: number };
-function LessonGenerating({ msgIndex }: LessonGeneratingProps) {
+// ── Outline-early: shown while status==='generating' and spec has content ────
+
+type OutlineProps = { spec: Partial<LessonPlan> };
+function LessonOutline({ spec }: OutlineProps) {
+  if (!spec.objective && (!spec.blockOutline || spec.blockOutline.length === 0)) return null;
   return (
-    <div
-      data-testid="lesson-generating"
-      className="mt-8 rounded-xl border border-sky-200 bg-sky-50 px-6 py-10 text-center"
-      aria-live="polite"
-      aria-label="Lesson is being generated"
-    >
-      <div
-        className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-sky-300 border-t-sky-600"
-        aria-hidden="true"
-      />
-      <p className="mt-4 text-base font-medium text-sky-700">{GENERATING_MESSAGES[msgIndex]}</p>
-      <p className="mt-1 text-sm text-sky-600">This usually takes 30–90 seconds.</p>
+    <div data-testid="lesson-outline" className="mt-4 rounded-xl border border-sky-100 bg-sky-50/50 px-5 py-4">
+      {spec.objective && (
+        <p className="text-sm text-ink-700 mb-3">
+          <span className="font-semibold text-sky-700">Goal:</span> {spec.objective}
+        </p>
+      )}
+      {spec.blockOutline && spec.blockOutline.length > 0 && (
+        <ol className="list-decimal list-inside space-y-1 text-sm text-ink-600">
+          {spec.blockOutline.map((item, i) => (
+            <li key={i} className="leading-snug capitalize">
+              {item.focus}
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }
+
+// ── Generating spinner — display only ────────────────────────────────────────
+
+type LessonGeneratingProps = { msgIndex: number; stage: ProgressStage | null; spec: Partial<LessonPlan> };
+function LessonGenerating({ msgIndex, stage, spec }: LessonGeneratingProps) {
+  const message = stage ? STAGE_MESSAGES[stage] : GENERATING_MESSAGES[msgIndex];
+  const hasOutline = !!(spec.objective || (spec.blockOutline && spec.blockOutline.length > 0));
+  return (
+    <div>
+      {hasOutline && <LessonOutline spec={spec} />}
+      <div
+        data-testid="lesson-generating"
+        className="mt-8 rounded-xl border border-sky-200 bg-sky-50 px-6 py-10 text-center"
+        aria-live="polite"
+        aria-label="Lesson is being generated"
+      >
+        <div
+          className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-sky-300 border-t-sky-600"
+          aria-hidden="true"
+        />
+        <p className="mt-4 text-base font-medium text-sky-700">{message}</p>
+        <p className="mt-1 text-sm text-sky-600">This usually takes 30–90 seconds.</p>
+      </div>
+    </div>
+  );
+}
+
+// ── Ready lesson renderer ────────────────────────────────────────────────────
 
 type LessonReadyProps = Props & {
   data: LessonData;
@@ -120,6 +165,22 @@ function LessonReady({ lessonId, trackId, data }: LessonReadyProps) {
             />
           );
         }
+        if (block.type === 'flashcard_deck') {
+          return <FlashcardDeck key={idx} block={block} />;
+        }
+        if (block.type === 'worked_example') {
+          return (
+            <WorkedExample
+              key={idx}
+              lessonId={lessonId}
+              block={block}
+              liveRef={liveRef}
+            />
+          );
+        }
+        if (block.type === 'animated_diagram') {
+          return <AnimatedDiagram key={idx} block={block} />;
+        }
         return null;
       })}
 
@@ -136,6 +197,8 @@ function LessonReady({ lessonId, trackId, data }: LessonReadyProps) {
     </article>
   );
 }
+
+// ── Failed lesson ────────────────────────────────────────────────────────────
 
 type LessonFailedProps = Props & {
   reason?: string;
@@ -163,7 +226,7 @@ function LessonFailed({ lessonId, reason, onRetried }: LessonFailedProps) {
         return;
       }
       // Retry started — hand off to LessonView by transitioning to 'generating'
-      // so the existing poll loop takes over. No router.refresh() needed here.
+      // so the stream/poll loop takes over. No router.refresh() needed here.
       onRetried();
     } catch {
       setError('Network error — please check your connection.');
@@ -194,13 +257,21 @@ function LessonFailed({ lessonId, reason, onRetried }: LessonFailedProps) {
   );
 }
 
-// Main exported component — owns the poll interval while status==='generating'.
-// The interval is cleared as soon as setData transitions to a non-generating status
-// (or on unmount), so no stale polling continues after the lesson is ready.
+// ── Main exported component ──────────────────────────────────────────────────
+//
+// Owns the stream (preferred) with polling as fallback while status==='generating'.
+// Stream consumption:
+//   - On 'planned' event: refetch GET once to pick up spec (persisted by stagePlan).
+//   - On 'ready'/'failed' events: fetch GET once → setData.
+//   - On stream error/close-without-terminal: fall back to 2.5s polling.
+// Polling is preserved as the unconditional fallback.
+// Both are cleaned up on unmount/status transition.
+
 export function LessonView({ lessonId, trackId }: Props) {
   const [data, setData] = useState<LessonData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [msgIndex, setMsgIndex] = useState(0);
+  const [stage, setStage] = useState<ProgressStage | null>(null);
 
   // Initial fetch
   useEffect(() => {
@@ -224,17 +295,32 @@ export function LessonView({ lessonId, trackId }: Props) {
     return () => { active = false; };
   }, [lessonId]);
 
-  // Poll only while status === 'generating'. Interval is cleared when status
-  // transitions to ready/failed (setData called) or when the component unmounts.
+  // Stream consumption + polling fallback while status === 'generating'.
   useEffect(() => {
     if (!data || data.status !== 'generating') return;
 
     let active = true;
+    let abortController: AbortController | null = null;
 
+    // Ticker for the fallback rotating message (used when stream is active too, as a
+    // visual heartbeat, but stage message takes precedence in the render).
     const msgTimer = setInterval(() => {
       setMsgIndex((i) => (i + 1) % GENERATING_MESSAGES.length);
     }, 2500);
 
+    // Helper: one GET fetch to refresh data from the server.
+    async function refreshData() {
+      try {
+        const res = await fetch(`/api/lessons/${lessonId}`);
+        if (!active || !res.ok) return;
+        const json = (await res.json()) as LessonData;
+        if (active) setData(json);
+      } catch {
+        // ignore transient errors
+      }
+    }
+
+    // Start polling as the baseline; the stream may replace it as the primary update path.
     const pollTimer = setInterval(async () => {
       if (!active) return;
       try {
@@ -243,8 +329,6 @@ export function LessonView({ lessonId, trackId }: Props) {
         const json = (await res.json()) as LessonData;
         if (!active) return;
         if (json.status !== 'generating') {
-          // Transition out — setData will cause a re-render; this effect will
-          // not re-run for 'generating' so both intervals are cleaned up below.
           setData(json);
         }
       } catch {
@@ -252,10 +336,70 @@ export function LessonView({ lessonId, trackId }: Props) {
       }
     }, 2500);
 
+    // Attempt to consume the stream — 409 (terminal) → skip; 404 (no runId yet) → polling only.
+    async function consumeStream() {
+      abortController = new AbortController();
+      let res: Response;
+      try {
+        res = await fetch(`/api/lessons/${lessonId}/stream`, { signal: abortController.signal });
+      } catch {
+        return; // aborted or network error — polling takes over
+      }
+      if (!active) return;
+      if (res.status === 409) {
+        // Lesson is already terminal — do one final GET to pick up terminal state.
+        await refreshData();
+        return;
+      }
+      if (!res.ok || !res.body) return; // 404 (no runId) or other error — polling continues
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let receivedTerminal = false;
+
+      try {
+        while (active) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          // The stream route encodes events as NDJSON (application/x-ndjson) — one JSON object per line.
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            let event: ProgressEvent | null = null;
+            try { event = JSON.parse(trimmed) as ProgressEvent; } catch { continue; }
+            if (!active) break;
+            setStage(event.stage);
+            if (event.stage === 'planned') {
+              // spec was persisted by stagePlan — refetch GET to pick it up.
+              await refreshData();
+            } else if (event.stage === 'ready' || event.stage === 'failed') {
+              receivedTerminal = true;
+              await refreshData();
+            }
+          }
+          if (receivedTerminal) break;
+        }
+      } catch {
+        // stream read error — polling continues as fallback
+      } finally {
+        try { reader.cancel(); } catch { /* ignore */ }
+      }
+    }
+
+    consumeStream();
+
     return () => {
       active = false;
       clearInterval(msgTimer);
       clearInterval(pollTimer);
+      // Abort any in-flight stream fetch (safe to call even if stream isn't active).
+      if (abortController) {
+        try { abortController.abort(); } catch { /* ignore */ }
+      }
     };
   }, [lessonId, data?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -279,7 +423,7 @@ export function LessonView({ lessonId, trackId }: Props) {
   }
 
   if (data.status === 'generating') {
-    return <LessonGenerating msgIndex={msgIndex} />;
+    return <LessonGenerating msgIndex={msgIndex} stage={stage} spec={data.spec ?? {}} />;
   }
 
   if (data.status === 'failed') {
@@ -288,7 +432,10 @@ export function LessonView({ lessonId, trackId }: Props) {
         lessonId={lessonId}
         trackId={trackId}
         reason={data.failureReason}
-        onRetried={() => setData({ status: 'generating', spec: data.spec ?? {} })}
+        onRetried={() => {
+          setStage(null);
+          setData({ status: 'generating', spec: data.spec ?? {} });
+        }}
       />
     );
   }
