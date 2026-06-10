@@ -257,9 +257,9 @@ describe('hydrateTrackState', () => {
     expect(state!.edges[0].prereqId).toBe(nodeA.id);
   });
 
-  it('limits records to MAX_RECORDS_IN_CONTEXT (active only, ordered by seq)', async () => {
+  it('limits records to MAX_RECORDS_IN_CONTEXT (active only, ordered by seq descending)', async () => {
     // Seed a track with 2 active records + 1 superseded — only active records should appear,
-    // capped at 30. We assert ordering and active filter.
+    // capped at 30. We assert ordering (newest first) and active filter.
     const [u] = await testDb
       .insert(s.user)
       .values({ id: crypto.randomUUID(), name: 'RL', email: `rl-${crypto.randomUUID()}@t.dev` })
@@ -297,9 +297,9 @@ describe('hydrateTrackState', () => {
     // Only 2 active records (seq 1 and 3); seq 2 is superseded
     expect(state!.records).toHaveLength(2);
     expect(state!.records.every((r) => r.status === 'active')).toBe(true);
-    // Ordered by seq ascending
-    expect(state!.records[0].seq).toBe(1);
-    expect(state!.records[1].seq).toBe(3);
+    // Ordered by seq descending (newest first)
+    expect(state!.records[0].seq).toBe(3);
+    expect(state!.records[1].seq).toBe(1);
   });
 });
 

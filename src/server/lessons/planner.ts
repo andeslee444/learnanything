@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as s from '@/db/schema';
 import { llmObject } from '@/lib/ai';
@@ -27,8 +27,9 @@ export async function hydrateTrackState(db: Db, trackId: string): Promise<TrackS
     .select()
     .from(s.learningRecords)
     .where(and(eq(s.learningRecords.trackId, trackId), eq(s.learningRecords.status, 'active')))
-    .orderBy(s.learningRecords.seq)
+    .orderBy(desc(s.learningRecords.seq))
     .limit(MAX_RECORDS_IN_CONTEXT);
+  // newest records first: the planner sees the learner's most recent context (spec §4)
   const glossary = await db.select().from(s.glossaryTerms).where(eq(s.glossaryTerms.trackId, trackId));
   const nodes = await db.select().from(s.skillNodes).where(eq(s.skillNodes.trackId, trackId));
   const nodeIds = nodes.map((n) => n.id);
