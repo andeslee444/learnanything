@@ -85,6 +85,20 @@
       "when": 1781068464024,
       "tag": "0011_research",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1781068818608,
+      "tag": "0012_research-hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1781068828373,
+      "tag": "0013_dossier-updated-at-trigger",
+      "breakpoints": true
     }
   ]
 }

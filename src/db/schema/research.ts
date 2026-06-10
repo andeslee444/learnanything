@@ -19,8 +19,12 @@ export const topicDossiers = pgTable(
     modelVersion: text('model_version'),
     ttlExpiresAt: timestamp('ttl_expires_at', { withTimezone: true }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('topic_dossiers_embedding').using('hnsw', t.embedding.op('vector_cosine_ops'))]
+  (t) => [
+    index('topic_dossiers_embedding').using('hnsw', t.embedding.op('vector_cosine_ops')),
+    index('topic_dossiers_vertical_band_ttl').on(t.vertical, t.levelBand, t.ttlExpiresAt),
+  ]
 );
 
 export const trustDomains = pgTable(
@@ -28,6 +32,7 @@ export const trustDomains = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     vertical: text('vertical'), // null = global (the blocklist is global)
+    // Canonical form: lowercase, no leading www. — normalize at the application layer before insert/lookup.
     domain: text('domain').notNull(),
     tier: trustTier('tier').notNull(),
     note: text('note'),
