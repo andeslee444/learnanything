@@ -1,6 +1,6 @@
 import { generateText, Output, gateway } from 'ai';
 import type { LanguageModel } from 'ai';
-import type { z } from 'zod';
+import type { z } from 'zod'; // type-only import; `Output.object` handles schema validation
 
 // Gateway model IDs verified 2026-06-10 via https://ai-gateway.vercel.sh/v1/models
 export const MODEL_TIERS = {
@@ -36,5 +36,5 @@ export async function llmObject<T>(opts: {
     system: opts.system,
     prompt: opts.prompt,
   });
-  return opts.schema.parse(output);
+  return output as T;
 }

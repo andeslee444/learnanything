@@ -8,7 +8,10 @@ const schema = z.object({ answer: z.string() });
 describe('llmObject', () => {
   let priorFake: string | undefined;
   beforeEach(() => { priorFake = process.env.AI_FAKE_LLM; });
-  afterEach(() => { process.env.AI_FAKE_LLM = priorFake; });
+  afterEach(() => {
+    if (priorFake === undefined) delete process.env.AI_FAKE_LLM;
+    else process.env.AI_FAKE_LLM = priorFake;
+  });
 
   it('serves fixtures in fake mode', async () => {
     process.env.AI_FAKE_LLM = '1';
@@ -24,6 +27,7 @@ describe('llmObject', () => {
 
   it('parses structured output from the model (mock)', async () => {
     process.env.AI_FAKE_LLM = '0';
+    // MockLanguageModelV3 doGenerate shape matches ai@6.0.199 internal protocol — update if the SDK upgrades.
     const mock = new MockLanguageModelV3({
       doGenerate: async () => ({
         content: [{ type: 'text', text: JSON.stringify({ answer: '42' }) }],
