@@ -39,6 +39,7 @@ export const workedExampleSchema = z.object({
 export const diagramShapeSchema = z.object({
   id: z.string().min(1).max(40),
   kind: z.enum(['box', 'circle', 'arrow', 'label']),
+  // x/y: boxes/labels = top-left; circles = center (SVG semantics); arrows = start point with toX/toY end.
   x: z.number().min(0).max(100), y: z.number().min(0).max(100),   // percentage coords
   w: z.number().min(1).max(100).optional(), h: z.number().min(1).max(100).optional(),
   toX: z.number().min(0).max(100).optional(), toY: z.number().min(0).max(100).optional(), // arrows
@@ -95,4 +96,34 @@ export type LessonPlan = z.infer<typeof lessonPlanSchema>;
 /** Win-check pass rule (spec §3: ≥85%): correct >= ceil(0.85 * n). With 2-4 MC items this means all-correct. */
 export function winCheckPassed(correct: number, total: number): boolean {
   return correct >= Math.ceil(0.85 * total);
+}
+
+/**
+ * Find an attempt item in lesson content by kind and itemId.
+ * Scans openerItems, quiz blocks, worked_example completionItems, and winCheck items.
+ * Returns the QuizItem or null if not found.
+ */
+export function findAttemptItem(
+  content: LessonContent,
+  kind: 'opener' | 'quiz' | 'win_check',
+  itemId: string,
+): QuizItem | null {
+  if (kind === 'opener') {
+    return content.openerItems.find((qi) => qi.id === itemId) || null;
+  } else if (kind === 'quiz') {
+    for (const block of content.blocks) {
+      if (block.type === 'quiz') {
+        const found = block.items.find((qi) => qi.id === itemId);
+        if (found) return found;
+      } else if (block.type === 'worked_example') {
+        if (block.completionItem.id === itemId) {
+          return block.completionItem;
+        }
+      }
+    }
+    return null;
+  } else {
+    // win_check
+    return content.winCheck.items.find((qi) => qi.id === itemId) || null;
+  }
 }

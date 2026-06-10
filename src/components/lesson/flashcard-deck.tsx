@@ -60,6 +60,7 @@ export function FlashcardDeck({ block }: Props) {
       <button
         data-testid="flashcard-flip"
         onClick={handleFlip}
+        aria-pressed={flipped}
         aria-label={flipped ? 'Showing back — click to flip to front' : 'Showing front — click to flip to back'}
         className="w-full rounded-lg border border-sky-200 bg-white px-5 py-6 text-left min-h-[100px] flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
         style={{

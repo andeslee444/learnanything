@@ -10,8 +10,7 @@ import { testDb, testPool, resetDb } from './db';
 import * as s from '@/db/schema';
 import { placeHold } from '@/lib/credits';
 import { createLessonRow, stagePlan, stageGenerate, stageResearch, recordWinCheckResult } from '@/server/lessons/pipeline';
-import { lessonContentSchema } from '@/server/lessons/blocks';
-import { winCheckPassed } from '@/server/lessons/blocks';
+import { lessonContentSchema, winCheckPassed, findAttemptItem, type QuizItem } from '@/server/lessons/blocks';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -418,6 +417,174 @@ describe('atomic zpdSnapshot merge — both write orderings preserve all keys', 
     const snap = row.zpdSnapshot as Record<string, unknown>;
     expect(snap.nodeId).toBeTruthy();
     expect(snap.workflowRunId).toBe('run-b');
+  });
+});
+
+// ── Test 7: findAttemptItem lookup across all item kinds ──────────────────────
+// Tests the pure helper that scans openerItems, quiz blocks (including worked_example
+// completionItems), and winCheck items by kind and itemId.
+
+describe('findAttemptItem', () => {
+  it('finds an opener item by itemId', () => {
+    const openerItem: QuizItem = {
+      id: 'opener-1',
+      question: 'What is a variable?',
+      options: ['A container', 'A function', 'A class', 'A module'],
+      correctIndex: 0,
+      explanation: 'A variable is a named container for a value.',
+    };
+    const content = {
+      blocks: [
+        {
+          type: 'article' as const,
+          heading: 'Variables',
+          markdown: 'A variable is...',
+          citationUrls: ['https://docs.python.org'],
+        },
+      ],
+      winCheck: {
+        items: [
+          {
+            id: 'wincheck-1',
+            question: 'What holds a value?',
+            options: ['Variable', 'Function', 'Class', 'Module'],
+            correctIndex: 0,
+            explanation: 'Variables hold values.',
+          },
+        ],
+      },
+      openerItems: [openerItem],
+    };
+    const found = findAttemptItem(content, 'opener', 'opener-1');
+    expect(found).toEqual(openerItem);
+  });
+
+  it('finds a quiz item in a quiz block by itemId', () => {
+    const quizItem: QuizItem = {
+      id: 'quiz-1',
+      question: 'What is a function?',
+      options: ['Code block', 'Variable', 'Class', 'Import'],
+      correctIndex: 0,
+      explanation: 'A function is a reusable code block.',
+    };
+    const content = {
+      blocks: [
+        {
+          type: 'article' as const,
+          heading: 'Functions',
+          markdown: 'A function is...',
+          citationUrls: ['https://docs.python.org'],
+        },
+        {
+          type: 'quiz' as const,
+          items: [quizItem],
+        },
+      ],
+      winCheck: {
+        items: [
+          {
+            id: 'wincheck-1',
+            question: 'What is a function?',
+            options: ['A', 'B', 'C', 'D'],
+            correctIndex: 0,
+            explanation: 'Explanation',
+          },
+        ],
+      },
+      openerItems: [],
+    };
+    const found = findAttemptItem(content, 'quiz', 'quiz-1');
+    expect(found).toEqual(quizItem);
+  });
+
+  it('finds a worked_example completionItem when kind=quiz', () => {
+    const completionItem: QuizItem = {
+      id: 'worked-ex-completion-1',
+      question: 'Solve: 2 + 2 = ?',
+      options: ['3', '4', '5', '6'],
+      correctIndex: 1,
+      explanation: '2 plus 2 equals 4.',
+    };
+    const content = {
+      blocks: [
+        {
+          type: 'worked_example' as const,
+          problem: 'Add two numbers.',
+          steps: [
+            { text: 'Add the first number to the second.' },
+            { text: 'Verify the result.' },
+          ],
+          completionItem,
+        },
+      ],
+      winCheck: {
+        items: [
+          {
+            id: 'wincheck-1',
+            question: 'Q',
+            options: ['A', 'B', 'C', 'D'],
+            correctIndex: 0,
+            explanation: 'E',
+          },
+        ],
+      },
+      openerItems: [],
+    };
+    const found = findAttemptItem(content, 'quiz', 'worked-ex-completion-1');
+    expect(found).toEqual(completionItem);
+  });
+
+  it('finds a winCheck item by itemId', () => {
+    const winCheckItem: QuizItem = {
+      id: 'wincheck-1',
+      question: 'Final check?',
+      options: ['Yes', 'No', 'Maybe', 'Unknown'],
+      correctIndex: 0,
+      explanation: 'Yes, you understood.',
+    };
+    const content = {
+      blocks: [
+        {
+          type: 'article' as const,
+          heading: 'Article',
+          markdown: 'Content',
+          citationUrls: ['https://example.com'],
+        },
+      ],
+      winCheck: {
+        items: [winCheckItem],
+      },
+      openerItems: [],
+    };
+    const found = findAttemptItem(content, 'win_check', 'wincheck-1');
+    expect(found).toEqual(winCheckItem);
+  });
+
+  it('returns null when itemId not found', () => {
+    const content = {
+      blocks: [
+        {
+          type: 'article' as const,
+          heading: 'Article',
+          markdown: 'Content',
+          citationUrls: ['https://example.com'],
+        },
+      ],
+      winCheck: {
+        items: [
+          {
+            id: 'wincheck-1',
+            question: 'Q',
+            options: ['A', 'B', 'C', 'D'],
+            correctIndex: 0,
+            explanation: 'E',
+          },
+        ],
+      },
+      openerItems: [],
+    };
+    const found = findAttemptItem(content, 'quiz', 'nonexistent-id');
+    expect(found).toBeNull();
   });
 });
 

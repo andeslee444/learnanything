@@ -6,7 +6,7 @@ import { auth } from '@/lib/auth';
 import { db } from '@/lib/db';
 import * as s from '@/db/schema';
 import { getLearnerByUserId } from '@/server/learners';
-import { lessonContentSchema, type QuizItem } from '@/server/lessons/blocks';
+import { lessonContentSchema, type QuizItem, findAttemptItem } from '@/server/lessons/blocks';
 import { recordWinCheckResult } from '@/server/lessons/pipeline';
 
 const bodySchema = z.object({
@@ -55,21 +55,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ lessonId: stri
   const rawContent = lesson.content as Record<string, unknown>;
   const openerItems = Array.isArray(rawContent.openerItems) ? (rawContent.openerItems as QuizItem[]) : [];
 
+  // Augment content with openerItems for helper function (not in schema).
+  const contentWithOpeners = { ...content, openerItems };
+
   // Find the item in the appropriate location.
-  let item: QuizItem | undefined;
-  if (kind === 'opener') {
-    item = openerItems.find((qi) => qi.id === itemId);
-  } else if (kind === 'quiz') {
-    for (const block of content.blocks) {
-      if (block.type === 'quiz') {
-        const found = block.items.find((qi) => qi.id === itemId);
-        if (found) { item = found; break; }
-      }
-    }
-  } else {
-    // win_check
-    item = content.winCheck.items.find((qi) => qi.id === itemId);
-  }
+  const item = findAttemptItem(contentWithOpeners, kind, itemId);
 
   if (!item) return NextResponse.json({ error: 'item_not_found' }, { status: 404 });
 
