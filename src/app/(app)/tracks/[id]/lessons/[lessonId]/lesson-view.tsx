@@ -281,7 +281,6 @@ export function LessonView({ lessonId, trackId }: Props) {
     if (!data || data.status !== 'generating') return;
 
     let active = true;
-    let usingStream = false;
     let abortController: AbortController | null = null;
 
     // Ticker for the fallback rotating message (used when stream is active too, as a
@@ -335,7 +334,6 @@ export function LessonView({ lessonId, trackId }: Props) {
       }
       if (!res.ok || !res.body) return; // 404 (no runId) or other error — polling continues
 
-      usingStream = true;
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -346,7 +344,7 @@ export function LessonView({ lessonId, trackId }: Props) {
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
-          // The workflow SDK streams chunks as JSON objects separated by newlines.
+          // The stream route encodes events as NDJSON (application/x-ndjson) — one JSON object per line.
           const lines = buffer.split('\n');
           buffer = lines.pop() ?? '';
           for (const line of lines) {
@@ -383,7 +381,6 @@ export function LessonView({ lessonId, trackId }: Props) {
       if (abortController) {
         try { abortController.abort(); } catch { /* ignore */ }
       }
-      void usingStream; // suppress unused-var lint
     };
   }, [lessonId, data?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -5,7 +5,7 @@
  * identical to what we call directly; e2e covers the full workflow).
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { testDb, testPool, resetDb } from './db';
 import * as s from '@/db/schema';
 import { placeHold } from '@/lib/credits';
@@ -371,6 +371,53 @@ describe("fail stage — marks generating lesson failed and refunds the hold", (
       .where(and(eq(s.creditLedger.lessonId, lesson.id), eq(s.creditLedger.entryType, 'refund')));
     expect(refunds.length).toBe(1);
     expect(refunds[0].amount).toBe(1);
+  });
+});
+
+// ── Test I1: atomic zpdSnapshot merge — both key-write orderings survive ─────
+// Verifies that stagePlan and a runId write can arrive in either order and both
+// keys are always present (atomic jsonb || never loses a concurrent key).
+
+describe('atomic zpdSnapshot merge — both write orderings preserve all keys', () => {
+  it('runId written first, then stagePlan: both workflowRunId and nodeId present', async () => {
+    const { trackId } = await seedFullTrack('zpd-order-a@t.dev');
+    const lesson = await createLessonRow(testDb, trackId);
+
+    // Simulate: runId arrives before stagePlan writes nodeId (create-route ordering).
+    await testDb
+      .update(s.lessons)
+      .set({ zpdSnapshot: sql`zpd_snapshot || ${JSON.stringify({ workflowRunId: 'run-a' })}::jsonb` })
+      .where(eq(s.lessons.id, lesson.id));
+
+    // stagePlan writes nodeId atomically.
+    const planResult = await stagePlan(testDb, lesson.id);
+    expect(planResult.status).toBe('planned');
+
+    const [row] = await testDb.select().from(s.lessons).where(eq(s.lessons.id, lesson.id));
+    const snap = row.zpdSnapshot as Record<string, unknown>;
+    expect(snap.workflowRunId).toBe('run-a');
+    expect(snap.nodeId).toBeTruthy();
+    expect(snap.nodeName).toBeTruthy();
+  });
+
+  it('stagePlan written first, then runId: both nodeId and workflowRunId present', async () => {
+    const { trackId } = await seedFullTrack('zpd-order-b@t.dev');
+    const lesson = await createLessonRow(testDb, trackId);
+
+    // stagePlan writes nodeId first.
+    const planResult = await stagePlan(testDb, lesson.id);
+    expect(planResult.status).toBe('planned');
+
+    // Simulate: runId arrives after (delayed workflow start).
+    await testDb
+      .update(s.lessons)
+      .set({ zpdSnapshot: sql`zpd_snapshot || ${JSON.stringify({ workflowRunId: 'run-b' })}::jsonb` })
+      .where(eq(s.lessons.id, lesson.id));
+
+    const [row] = await testDb.select().from(s.lessons).where(eq(s.lessons.id, lesson.id));
+    const snap = row.zpdSnapshot as Record<string, unknown>;
+    expect(snap.nodeId).toBeTruthy();
+    expect(snap.workflowRunId).toBe('run-b');
   });
 });
 

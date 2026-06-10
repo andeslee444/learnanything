@@ -79,11 +79,12 @@ export async function stagePlan(db: Db, lessonId: string) {
   const node = pickFrontierNode(state);
   if (!node) return failLesson(db, lessonId, 'no frontier skill to teach (map complete)');
   const plan = await planLesson(state, node);
+  const planPatch = { nodeId: node.id, nodeName: node.name, expertiseBand: state.track.expertiseBand };
   await db
     .update(s.lessons)
     .set({
       spec: plan,
-      zpdSnapshot: { nodeId: node.id, nodeName: node.name, expertiseBand: state.track.expertiseBand },
+      zpdSnapshot: sql`zpd_snapshot || ${JSON.stringify(planPatch)}::jsonb`,
       modelVersion: MODEL_TIERS.planner,
     })
     .where(eq(s.lessons.id, lessonId));
@@ -107,7 +108,7 @@ export async function stageResearch(db: Db, lessonId: string) {
   await db
     .update(s.lessons)
     .set({
-      zpdSnapshot: { ...(lesson.zpdSnapshot as Record<string, unknown>), dossierId: result.dossierId },
+      zpdSnapshot: sql`zpd_snapshot || ${JSON.stringify({ dossierId: result.dossierId })}::jsonb`,
     })
     .where(eq(s.lessons.id, lessonId));
   return { status: 'researched' as const };

@@ -46,7 +46,8 @@ export async function generateLessonWorkflow(lessonId: string) {
     await emitProgress(result.status === 'ready' ? 'ready' : 'failed');
     return result;
   } catch {
+    const failed = await markFailed(lessonId, 'generation error — try again');
     await emitProgress('failed');
-    return markFailed(lessonId, 'generation error — try again');
+    return failed;
   }
 }

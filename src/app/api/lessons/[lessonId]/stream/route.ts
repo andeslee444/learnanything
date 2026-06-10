@@ -8,6 +8,8 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as s from '@/db/schema';
 import { getLearnerByUserId } from '@/server/learners';
 
+export const maxDuration = 120;
+
 type Db = NodePgDatabase<typeof s>;
 
 // Terminal lesson statuses — if the lesson is in one of these states the
@@ -53,13 +55,15 @@ export async function GET(req: Request, ctx: { params: Promise<{ lessonId: strin
   const startIndex = startIndexParam !== null ? parseInt(startIndexParam, 10) : undefined;
 
   const run = getRun(result.runId);
-  const stream = run.getReadable<import('@/workflows/generate-lesson').ProgressEvent>(
+  const objectStream = run.getReadable<import('@/workflows/generate-lesson').ProgressEvent>(
     startIndex !== undefined ? { startIndex } : undefined,
   );
 
-  // Proxy the readable stream directly as the response body.
-  // Content-Type: text/plain matches the workflow streaming doc convention for plain streams.
-  return new Response(stream, {
-    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-  });
+  // The run's readable emits deserialized JS objects; encode them as NDJSON so the
+  // Response body is a byte stream the client can read line-by-line.
+  const encoder = new TextEncoder();
+  const ndjson = objectStream.pipeThrough(new TransformStream({
+    transform(event, controller) { controller.enqueue(encoder.encode(JSON.stringify(event) + '\n')); },
+  }));
+  return new Response(ndjson, { headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' } });
 }
