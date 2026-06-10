@@ -1,4 +1,5 @@
-import { pgTable, text, timestamp, jsonb, real, uuid, pgEnum, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, real, uuid, pgEnum, primaryKey, check } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { tracks } from './learners';
 
 export const nodeMastery = pgEnum('node_mastery', ['not_started', 'in_progress', 'demonstrated', 'mastered']);
@@ -28,24 +29,33 @@ export const skillNodeEdges = pgTable(
     nodeId: uuid('node_id').notNull().references(() => skillNodes.id, { onDelete: 'cascade' }),
     prereqId: uuid('prereq_id').notNull().references(() => skillNodes.id, { onDelete: 'cascade' }),
   },
-  (t) => [primaryKey({ columns: [t.nodeId, t.prereqId] })]
+  (t) => [
+    primaryKey({ columns: [t.nodeId, t.prereqId] }),
+    check('skill_node_edges_no_self_loop', sql`${t.nodeId} <> ${t.prereqId}`),
+  ]
 );
 
-export const resources = pgTable('resources', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  trackId: uuid('track_id').notNull().references(() => tracks.id, { onDelete: 'cascade' }),
-  url: text('url'),
-  title: text('title').notNull(),
-  resourceType: resourceType('resource_type').notNull(),
-  kind: resourceKind('kind').notNull(),
-  annotation: text('annotation').notNull(), // mandatory: what it covers / when to reach for it
-  trustRationale: text('trust_rationale'),
-  status: resourceStatus('status').notNull().default('active'),
-  prunedReason: text('pruned_reason'),
-  origin: resourceOrigin('origin').notNull(),
-  lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const resources = pgTable(
+  'resources',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    trackId: uuid('track_id').notNull().references(() => tracks.id, { onDelete: 'cascade' }),
+    url: text('url'),
+    title: text('title').notNull(),
+    resourceType: resourceType('resource_type').notNull(),
+    kind: resourceKind('kind').notNull(),
+    annotation: text('annotation').notNull(), // mandatory: what it covers / when to reach for it
+    trustRationale: text('trust_rationale'),
+    status: resourceStatus('status').notNull().default('active'),
+    prunedReason: text('pruned_reason'),
+    origin: resourceOrigin('origin').notNull(),
+    lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check('resources_exa_requires_url', sql`${t.origin} <> 'exa' OR ${t.url} IS NOT NULL`),
+  ]
+);
 
 export const resourceGaps = pgTable('resource_gaps', {
   id: uuid('id').primaryKey().defaultRandom(),

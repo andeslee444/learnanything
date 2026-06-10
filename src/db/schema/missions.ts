@@ -21,6 +21,7 @@ export const missionRevisions = pgTable('mission_revisions', {
   missionId: uuid('mission_id').notNull().references(() => missions.id, { onDelete: 'cascade' }),
   priorSnapshot: jsonb('prior_snapshot').notNull(),
   reason: text('reason').notNull(),
+  // App-enforced: must reference a record in the same track as the mission (no composite FK — revisions don't carry track_id).
   linkedLearningRecordId: uuid('linked_learning_record_id').references(() => learningRecords.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

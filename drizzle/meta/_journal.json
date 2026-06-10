@@ -15,6 +15,20 @@
       "when": 1781066538111,
       "tag": "0001_learner-domain",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781067067016,
+      "tag": "0002_schema-hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1781067075623,
+      "tag": "0003_updated-at-triggers",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, jsonb, real, uuid, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, jsonb, real, uuid, pgEnum, index } from 'drizzle-orm/pg-core';
 import { user } from './auth';
 
 export const ageBand = pgEnum('age_band', ['13_15', '16_17', '18_plus']);
@@ -19,13 +19,17 @@ export const learners = pgTable('learners', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const tracks = pgTable('tracks', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  learnerId: uuid('learner_id').notNull().references(() => learners.id, { onDelete: 'cascade' }),
-  topic: text('topic').notNull(),
-  vertical: text('vertical').notNull(), // 'programming' | 'history' at launch; free text by design
-  status: trackStatus('status').notNull().default('active'),
-  expertiseBand: expertiseBand('expertise_band').notNull().default('novice'),
-  communityOptOut: boolean('community_opt_out').notNull().default(false),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const tracks = pgTable(
+  'tracks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    learnerId: uuid('learner_id').notNull().references(() => learners.id, { onDelete: 'cascade' }),
+    topic: text('topic').notNull(),
+    vertical: text('vertical').notNull(), // 'programming' | 'history' at launch; free text by design
+    status: trackStatus('status').notNull().default('active'),
+    expertiseBand: expertiseBand('expertise_band').notNull().default('novice'),
+    communityOptOut: boolean('community_opt_out').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('tracks_learner_id').on(t.learnerId)]
+);
