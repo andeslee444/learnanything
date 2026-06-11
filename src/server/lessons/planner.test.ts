@@ -339,6 +339,7 @@ describe('planLesson — fake mode', () => {
       glossary: [],
       nodes: [],
       edges: [],
+      uploads: [],
     };
     const node = makeNode({ id: 'n1', name: 'Variables and types', summary: 'Declaring and using basic values', missionRelevance: 0.9 });
 

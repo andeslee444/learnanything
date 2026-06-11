@@ -11,6 +11,7 @@ import { hasCalibration } from '@/server/track-init';
 import { sweepStaleLessons } from '@/server/lessons/pipeline';
 import { TrackSetup } from './track-setup';
 import { LessonSection } from './lesson-section';
+import { UploadContext } from './upload-context';
 
 type NodeMastery = 'not_started' | 'in_progress' | 'demonstrated' | 'mastered';
 
@@ -188,6 +189,9 @@ export default async function TrackDetailPage({ params }: { params: Promise<{ id
             lessons={lessonCards}
             hasNodes={nodes.length > 0}
           />
+
+          {/* Upload context */}
+          <UploadContext trackId={id} />
         </section>
       )}
     </main>

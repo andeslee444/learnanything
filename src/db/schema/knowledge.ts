@@ -1,6 +1,7 @@
 import { pgTable, text, timestamp, jsonb, real, uuid, pgEnum, primaryKey, check, uniqueIndex } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { tracks } from './learners';
+import type { Extraction } from '@/server/research/extract';
 
 export const nodeMastery = pgEnum('node_mastery', ['not_started', 'in_progress', 'demonstrated', 'mastered']);
 export const resourceType = pgEnum('resource_type', ['book', 'article', 'video', 'docs', 'paper', 'community', 'local']);
@@ -49,6 +50,9 @@ export const resources = pgTable(
     status: resourceStatus('status').notNull().default('active'),
     prunedReason: text('pruned_reason'),
     origin: resourceOrigin('origin').notNull(),
+    // Quarantined extraction result (spec §6): raw text is discarded after extraction;
+    // only the structured claims/glossarySeeds/misconceptions survive.
+    extraction: jsonb('extraction').$type<Extraction | null>(),
     lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
