@@ -1,6 +1,44 @@
 import type { LlmPurpose } from './ai';
 
-/** Canned outputs for AI_FAKE_LLM=1. Each must parse against its call site's zod schema. */
+/**
+ * Sanitize-block fixture function (dynamic per prompt, spec §7).
+ * - article blocks → action 'rewrite' with fixed generic text + original citations preserved.
+ * - all other block types → action 'keep'.
+ *
+ * The prompt contains the block JSON after "<block>" so we parse it out via a simple regex.
+ * This is a fixture only; the regex is intentionally simple — it just needs to detect the
+ * block "type" field to decide rewrite vs keep.
+ */
+function sanitizeBlockFixture(prompt: string): unknown {
+  // Extract the block JSON section from the prompt (between <block> tags).
+  const match = prompt.match(/<block>([\s\S]*?)<\/block>/);
+  if (match) {
+    try {
+      const block = JSON.parse(match[1].trim()) as { type?: string; citationUrls?: string[] };
+      if (block.type === 'article') {
+        return {
+          action: 'rewrite',
+          block: {
+            type: 'article',
+            heading: 'Variables: names for values',
+            markdown:
+              'A **variable** stores a value under a name so the program can use it later. ' +
+              'This is a fundamental concept in every programming language.',
+            citationUrls: block.citationUrls ?? ['https://docs.python.org/3/tutorial/index.html'],
+          },
+          reason: 'Article block rewritten to remove any personalisation; citations preserved.',
+        };
+      }
+    } catch {
+      // Malformed JSON in prompt — fall through to 'keep'
+    }
+  }
+  return { action: 'keep', reason: 'Block is fully generic; no learner-derived content detected.' };
+}
+
+/** Canned outputs for AI_FAKE_LLM=1. Each must parse against its call site's zod schema.
+ *  Entries may be plain objects (static) or functions (dynamic: called with the prompt string).
+ */
 export const fakeOutputs: Record<LlmPurpose, unknown> = {
   concreteness: {
     concrete: true,
@@ -115,6 +153,10 @@ export const fakeOutputs: Record<LlmPurpose, unknown> = {
       'A **variable** stores a value under a name so your program can refer to it later. Think of it as a labeled box: `count = 3` puts the number 3 in a box called count. Variables let the same code work with different values — update the box contents and every part of the code that reads the label sees the new value.',
     citationUrls: ['https://docs.python.org/3/tutorial/index.html'],
   },
+
+  // Phase 10 — sanitize-block: dynamic fixture (function of prompt).
+  // article → rewrite with generic text + original citations; everything else → keep.
+  'sanitize-block': sanitizeBlockFixture,
 
   // Phase 7 — tutor: hint-only reply, never a full solution, crisis=false
   tutor: {

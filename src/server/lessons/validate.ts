@@ -10,6 +10,13 @@ export type LessonValidationInput = {
   ageBand?: string;
   /** Glossary alias entries for the alias scan — undefined/empty skips the scan */
   glossaryAvoidAliases?: GlossaryAliasEntry[];
+  /**
+   * When false, the validator does NOT require openerItems to be present.
+   * Used by sanitizeLessonContent (spec §7): openerItems are always stripped before
+   * sharing — their absence is intentional, not a defect.
+   * Default: true (existing callers unchanged).
+   */
+  requireOpeners?: boolean;
 };
 
 /** 4a validator subset (spec §2 step 4). Readability + glossary-alias scans land in 4b. */

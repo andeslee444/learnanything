@@ -25,7 +25,8 @@ export type LlmPurpose =
   | 'extract-claims'      // Phase 6: extract factual claims from a single article block
   | 'entail-claim'        // Phase 6: entail one claim against the dossier
   | 'regenerate-block'    // Phase 6: regenerate ONE article block when claims fail entailment
-  | 'tutor';              // Phase 7: tutor panel reply with hard pedagogy guardrails
+  | 'tutor'              // Phase 7: tutor panel reply with hard pedagogy guardrails
+  | 'sanitize-block';    // Phase 10: strip learner-derived personalization for public sharing
 
 /**
  * Single entry point for structured LLM calls.
@@ -42,7 +43,11 @@ export async function llmObject<T>(opts: {
 }): Promise<T> {
   if (!opts.modelOverride && process.env.AI_FAKE_LLM === '1') {
     const { fakeOutputs } = await import('./ai-fixtures');
-    return opts.schema.parse(fakeOutputs[opts.purpose]);
+    const raw = fakeOutputs[opts.purpose];
+    // Dynamic fixtures: if the entry is a function, call it with the prompt so the
+    // fixture can vary by input (e.g. 'sanitize-block' returns rewrite/keep by block type).
+    const resolved = typeof raw === 'function' ? raw(opts.prompt) : raw;
+    return opts.schema.parse(resolved);
   }
   const model: LanguageModel = opts.modelOverride ?? gateway(MODEL_TIERS[opts.tier]);
   const { output } = await generateText({
