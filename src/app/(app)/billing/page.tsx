@@ -15,15 +15,15 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { auth } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { balance } from '@/lib/credits';
+import { balance, ensureMonthlyGrant } from '@/lib/credits';
 import { getLedgerHistory, getSubscriptionStatus } from '@/lib/billing-queries';
 import { BillingActions } from './billing-actions';
 
 const ENTRY_TYPE_LABELS: Record<string, string> = {
   grant: 'Monthly grant',
   purchase: 'Subscription payment',
-  hold: 'Lesson hold',
-  capture: 'Lesson used',
+  hold: 'Lesson started (credit held)',
+  capture: 'Lesson completed',
   refund: 'Lesson refunded',
 };
 
@@ -57,6 +57,9 @@ export default async function BillingPage({
   if (!session) redirect('/login');
 
   const userId = session.user.id;
+  // Materialize the free monthly grant before reading the balance so a new/free
+  // user sees 3 credits instead of 0 (ensureMonthlyGrant is idempotent + advisory-locked).
+  await ensureMonthlyGrant(db, userId);
   const [bal, subscriptionStatus, ledger] = await Promise.all([
     balance(db, userId),
     getSubscriptionStatus(db, userId),
@@ -163,8 +166,9 @@ export default async function BillingPage({
                             ? 'text-ink-600'
                             : 'text-ink-400'
                         }
+                        aria-label={row.amount === 0 ? 'settlement marker' : undefined}
                       >
-                        {row.amount > 0 ? `+${row.amount}` : row.amount === 0 ? '0' : row.amount}
+                        {row.amount > 0 ? `+${row.amount}` : row.amount === 0 ? '—' : row.amount}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right text-ink-600">

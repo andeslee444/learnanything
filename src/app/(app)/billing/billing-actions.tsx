@@ -6,12 +6,14 @@
  * Handles checkout → redirect and portal → redirect.
  * On 503 (billing not configured) renders a notice in place of the button.
  * On 409 (already_subscribed) from checkout, refresh-hints the server so the
- * server component can re-render with the updated status.
+ * server component can re-render with the updated status. The hint is shown
+ * only while the router refresh is in flight (isPending) so it auto-clears.
  */
 
-import { useState } from 'react';
+import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { friendlyBillingError } from '@/lib/billing-error';
 
 type Props = {
   subscriptionStatus: 'none' | 'active' | 'canceled';
@@ -28,6 +30,9 @@ type ActionState =
 export function BillingActions({ subscriptionStatus, balance }: Props) {
   const router = useRouter();
   const [state, setState] = useState<ActionState>({ kind: 'idle' });
+  const [isPending, startTransition] = useTransition();
+  // isPending is true from the startTransition(router.refresh()) call in the 409
+  // handler until the router re-render lands, giving the hint a natural lifespan.
 
   // ── Checkout ────────────────────────────────────────────────────────────────
 
@@ -43,13 +48,16 @@ export function BillingActions({ subscriptionStatus, balance }: Props) {
       }
       if (res.status === 409) {
         // Already subscribed — refresh so the server component re-reads DB.
+        // Wrap in startTransition so isPending stays true until the re-render
+        // lands; the hint renders only while isPending and auto-clears via the
+        // useEffect above when subscriptionStatus flips to 'active'.
         setState({ kind: 'already_subscribed' });
-        router.refresh();
+        startTransition(() => { router.refresh(); });
         return;
       }
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string };
-        setState({ kind: 'error', message: body.error ?? 'Unexpected error — please try again.' });
+        setState({ kind: 'error', message: friendlyBillingError(body.error) });
         return;
       }
 
@@ -78,7 +86,7 @@ export function BillingActions({ subscriptionStatus, balance }: Props) {
       }
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string };
-        setState({ kind: 'error', message: body.error ?? 'Unexpected error — please try again.' });
+        setState({ kind: 'error', message: friendlyBillingError(body.error) });
         return;
       }
 
@@ -146,9 +154,14 @@ export function BillingActions({ subscriptionStatus, balance }: Props) {
         </button>
       )}
 
-      {/* Already-subscribed (409 edge case — shouldn't normally render after refresh) */}
-      {state.kind === 'already_subscribed' && (
-        <p className="text-xs text-sky-600">
+      {/* Already-subscribed (409 edge case) — shown only while the router refresh
+          is in flight; auto-clears once the server re-render lands. */}
+      {state.kind === 'already_subscribed' && isPending && (
+        <p
+          className="text-xs text-sky-600"
+          role="status"
+          aria-live="polite"
+        >
           You already have an active subscription — refreshing your status…
         </p>
       )}

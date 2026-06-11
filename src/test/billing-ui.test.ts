@@ -13,7 +13,7 @@
  * 7. getSubscriptionStatus: returns 'canceled' after update.
  *
  * 8. classifyLessonError: 402 → 'credits'; 409/already_generating → 'already_generating';
- *    409/unknown → 'error'; 200 → null; network-fail Error → 'error'.
+ *    409/unknown → 'error'; 200 → null; 500/unexpected status → 'error'.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -22,6 +22,7 @@ import * as s from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { getLedgerHistory, getSubscriptionStatus } from '@/lib/billing-queries';
 import { classifyLessonError } from '@/lib/lesson-error';
+import { friendlyBillingError } from '@/lib/billing-error';
 
 // ── Pool lifecycle ─────────────────────────────────────────────────────────────
 
@@ -176,7 +177,27 @@ describe('getSubscriptionStatus', () => {
   });
 });
 
-// ── 8. classifyLessonError ────────────────────────────────────────────────────
+// ── 8. friendlyBillingError ───────────────────────────────────────────────────
+
+describe('friendlyBillingError', () => {
+  it('8a. "unauthenticated" → session-expired message', () => {
+    expect(friendlyBillingError('unauthenticated')).toBe('Your session expired — please sign in again.');
+  });
+
+  it('8b. "no_subscription" → no-subscription message', () => {
+    expect(friendlyBillingError('no_subscription')).toBe('No subscription found.');
+  });
+
+  it('8c. unknown code → generic fallback', () => {
+    expect(friendlyBillingError('some_unknown_code')).toBe('Something went wrong — please try again.');
+  });
+
+  it('8d. undefined → generic fallback', () => {
+    expect(friendlyBillingError(undefined)).toBe('Something went wrong — please try again.');
+  });
+});
+
+// ── 9. classifyLessonError ────────────────────────────────────────────────────
 
 describe('classifyLessonError', () => {
   it('8a. 402 → "credits"', () => {
