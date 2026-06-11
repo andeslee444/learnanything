@@ -276,8 +276,8 @@ describe('synthesizeNarration — fake mode (no OPENAI_API_KEY / AI_FAKE_LLM=1)'
 // ── Route helpers — idempotency / ownership (unit-level) ─────────────────────
 // The route's idempotency and ownership logic are exercised here by importing
 // and calling buildNarrationScript + synthesizeNarration as building blocks.
-// Full HTTP-level route tests (POST then GET) live in src/test/narration-route.test.ts
-// which uses the test DB.
+// Full HTTP-level route tests (POST then GET) land in the phase-8 acceptance
+// suite (src/test/phase-8-acceptance.test.ts), which uses the test DB.
 
 describe('narration route building blocks — idempotency contract', () => {
   it('synthesizeNarration in fake mode never throws for any reasonable script', async () => {

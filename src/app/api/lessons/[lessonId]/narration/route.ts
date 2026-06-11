@@ -129,7 +129,7 @@ export async function POST(_req: Request, ctx: Ctx) {
   }
 
   // Insert — ON CONFLICT DO NOTHING handles concurrent duplicate POSTs
-  await db
+  const inserted = await db
     .insert(s.lessonNarrations)
     .values({
       lessonId,
@@ -137,7 +137,10 @@ export async function POST(_req: Request, ctx: Ctx) {
       audio: audioResult.buffer,
       transcript: script,
     })
-    .onConflictDoNothing({ target: s.lessonNarrations.lessonId });
+    .onConflictDoNothing({ target: s.lessonNarrations.lessonId })
+    .returning({ id: s.lessonNarrations.id });
 
-  return NextResponse.json({ ok: true, cached: false });
+  // Re-read: a concurrent POST may have won the insert race — either way a row
+  // now exists, so report cached:true for the loser.
+  return NextResponse.json({ ok: true, cached: inserted.length === 0 });
 }
