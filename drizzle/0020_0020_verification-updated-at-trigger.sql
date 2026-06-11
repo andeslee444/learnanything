@@ -1,0 +1,1 @@
+CREATE TRIGGER verification_results_set_updated_at BEFORE UPDATE ON "verification_results" FOR EACH ROW EXECUTE FUNCTION set_updated_at();
