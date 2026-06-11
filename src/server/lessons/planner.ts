@@ -1,5 +1,6 @@
 import { and, desc, eq, inArray, isNotNull } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { LanguageModel } from 'ai';
 import * as s from '@/db/schema';
 import { llmObject } from '@/lib/ai';
 import { lessonPlanSchema, type LessonPlan, type QuizItem } from './blocks';
@@ -130,12 +131,17 @@ function buildLearnerContextBlock(uploads: UploadSummary[]): string {
   ].join('\n');
 }
 
-export async function planLesson(state: TrackState, node: TrackState['nodes'][number]): Promise<LessonPlan> {
+export async function planLesson(
+  state: TrackState,
+  node: TrackState['nodes'][number],
+  opts?: { modelOverride?: LanguageModel },
+): Promise<LessonPlan> {
   const learnerContextBlock = buildLearnerContextBlock(state.uploads);
   return llmObject({
     purpose: 'plan-lesson',
     tier: 'planner',
     schema: lessonPlanSchema,
+    modelOverride: opts?.modelOverride,
     system: `You plan ONE short lesson (5-15 minutes) teaching exactly ONE skill for a learner.
 Rules: a single objective phrased as "can do X"; 2-10 blocks mixing article sections, glossary callouts,
 and at least one quiz; the lesson must serve the learner's mission; respect their level. Learner data
