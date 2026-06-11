@@ -61,11 +61,13 @@ export default async function TracksPage() {
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="rounded-full bg-sun-100 px-2 py-0.5 text-xs font-medium text-sun-700 capitalize">
+              {/* sun-700 (#8c5e0a) on sun-100 (#fff3d6): 4.97:1 — passes WCAG AA. */}
+              <span className="rounded-full bg-sun-100 px-2 py-0.5 text-sm font-semibold text-sun-700 capitalize">
                 {track.status}
               </span>
             </div>
-            <p className="mt-auto text-xs text-ink-400">
+            {/* ink-400 (#8a97a6) on cloud (#fdfdfc) = ~2.9:1 — too low for small text; use ink-600 for AA. */}
+            <p className="mt-auto text-xs text-ink-600">
               Started {new Date(track.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
             </p>
           </Link>

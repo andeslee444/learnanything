@@ -37,6 +37,7 @@ const STATUS_CLASSES: Record<string, string> = {
   ready: 'bg-sky-200 text-sky-800',
   failed: 'bg-red-100 text-red-700',
   queued: 'bg-ink-400/10 text-ink-600',
+  // sun-700 (#8c5e0a) on sun-100 (#fff3d6): 4.97:1 — passes WCAG AA for all text sizes.
   needs_review: 'bg-sun-100 text-sun-700',
 };
 
@@ -102,7 +103,7 @@ export function LessonSection({ trackId, lessons, hasNodes }: Props) {
               </div>
               <div className="flex items-center gap-3">
                 <span
-                  className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_CLASSES[lesson.status] ?? 'bg-ink-400/10 text-ink-600'}`}
+                  className={`rounded-full px-2.5 py-0.5 text-sm font-semibold ${STATUS_CLASSES[lesson.status] ?? 'bg-ink-400/10 text-ink-600'}`}
                   aria-label={`Status: ${STATUS_LABELS[lesson.status] ?? lesson.status}`}
                 >
                   {STATUS_LABELS[lesson.status] ?? lesson.status}

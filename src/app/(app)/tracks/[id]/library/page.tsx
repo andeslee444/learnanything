@@ -99,14 +99,14 @@ export default async function LibraryPage({
         <h2 className="text-lg font-semibold text-ink-900 mb-4">
           Terms you own
           {glossaryTerms.length > 0 && (
-            <span className="ml-2 text-sm font-normal text-ink-400">
+            <span className="ml-2 text-sm font-normal text-ink-600">
               ({glossaryTerms.length})
             </span>
           )}
         </h2>
 
         {glossaryTerms.length === 0 ? (
-          <p className="text-sm text-ink-400 italic">
+          <p className="text-sm text-ink-600 italic">
             No terms yet — complete a lesson to promote glossary terms.
           </p>
         ) : (
@@ -135,14 +135,14 @@ export default async function LibraryPage({
         <h2 className="text-lg font-semibold text-ink-900 mb-4">
           Reference docs
           {referenceDocs.length > 0 && (
-            <span className="ml-2 text-sm font-normal text-ink-400">
+            <span className="ml-2 text-sm font-normal text-ink-600">
               ({referenceDocs.length})
             </span>
           )}
         </h2>
 
         {referenceDocs.length === 0 ? (
-          <p className="text-sm text-ink-400 italic">
+          <p className="text-sm text-ink-600 italic">
             No reference docs yet — they&apos;re generated automatically after you complete lessons.
           </p>
         ) : (
@@ -160,7 +160,7 @@ export default async function LibraryPage({
                 <p className="font-medium text-ink-900 group-hover:text-sky-700 transition">
                   {doc.title}
                 </p>
-                <p className="mt-1 text-xs text-ink-400">
+                <p className="mt-1 text-xs text-ink-600">
                   Updated {new Date(doc.updatedAt).toLocaleDateString()}
                 </p>
               </Link>
@@ -174,7 +174,7 @@ export default async function LibraryPage({
         <h2 className="text-lg font-semibold text-ink-900 mb-4">What you&apos;ve learned</h2>
 
         {learningRecords.length === 0 ? (
-          <p className="text-sm text-ink-400 italic">
+          <p className="text-sm text-ink-600 italic">
             No learning records yet — complete a lesson to build your record.
           </p>
         ) : (
@@ -194,9 +194,9 @@ export default async function LibraryPage({
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
-                      {/* Type chip */}
+                      {/* Type chip — sun-700 (#8c5e0a) on sun-100 (#fff3d6): 4.97:1 — passes WCAG AA. */}
                       <span
-                        className={`inline-block mb-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${
+                        className={`inline-block mb-1.5 rounded-full px-2 py-0.5 text-sm font-semibold ${
                           record.recordType === 'demonstrated_understanding'
                             ? 'bg-sun-100 text-sun-700'
                             : record.recordType === 'corrected_misconception'
@@ -210,7 +210,7 @@ export default async function LibraryPage({
                       {/* Title */}
                       <p
                         className={`font-medium text-sm ${
-                          isSuperseded ? 'line-through text-ink-400' : 'text-ink-900'
+                          isSuperseded ? 'line-through text-ink-600' : 'text-ink-900'
                         }`}
                       >
                         {record.title}
@@ -223,14 +223,14 @@ export default async function LibraryPage({
 
                       {/* Superseded note */}
                       {isSuperseded && (
-                        <p className="mt-1 text-xs text-ink-400 italic">
+                        <p className="mt-1 text-xs text-ink-600 italic">
                           Understanding evolved
                         </p>
                       )}
 
                       {/* Implications */}
                       {!isSuperseded && record.implications && (
-                        <p className="mt-2 text-xs text-ink-400 italic">
+                        <p className="mt-2 text-xs text-ink-600 italic">
                           {record.implications}
                         </p>
                       )}
@@ -239,7 +239,7 @@ export default async function LibraryPage({
                     {/* Timestamp */}
                     <time
                       dateTime={record.createdAt.toISOString()}
-                      className="shrink-0 text-xs text-ink-400 mt-0.5"
+                      className="shrink-0 text-xs text-ink-600 mt-0.5"
                     >
                       {new Date(record.createdAt).toLocaleDateString()}
                     </time>
