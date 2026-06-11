@@ -4,7 +4,7 @@
  * Gate: ADMIN_EMAILS env (comma-separated); session email must be in it → else 404.
  * Non-admin callers receive 404 (don't reveal the route exists).
  */
-import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { start } from 'workflow/api';
@@ -74,7 +74,7 @@ export async function GET() {
         ),
       ),
     )
-    .orderBy(s.lessons.createdAt)
+    .orderBy(desc(s.lessons.createdAt))
     .limit(50);
 
   return NextResponse.json({ items: rows });
@@ -109,9 +109,11 @@ export async function POST(req: Request) {
   // action === 'retry':
   // Admin retry is house-paid — NO placeHold/charge cycle.
   // CAS flip: failed → generating (same logic as the user retry route).
-  // We do NOT call placeHold, so there is no hold to capture.
-  // The deliver path (pipeline.ts) calls findHoldId → null (no hold) → captureHold is skipped.
-  // This is intentional and safe: comment in pipeline.ts already catches null holdId.
+  // We do NOT call placeHold, so there is no new hold to capture.
+  // The deliver path (pipeline.ts) calls findHoldId, which may find the old refunded hold
+  // from the original attempt. captureHold on a refunded/already-settled hold will throw
+  // "already settled" — that throw is caught by the .catch() in deliver, so it is safe.
+  // Net effect: admin retries are house-paid; no new credit is consumed.
   const flipped = await db
     .update(s.lessons)
     .set({ status: 'generating', content: null })

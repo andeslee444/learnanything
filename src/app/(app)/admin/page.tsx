@@ -10,7 +10,7 @@
  * Client component so retry/dismiss actions use fetch without a full page reload.
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 
 interface QueueItem {
   id: string;
@@ -31,20 +31,23 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [actionStates, setActionStates] = useState<Record<string, ActionState>>({});
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const res = await fetch('/api/admin/queue');
-    if (res.status === 404) {
-      setNotFound(true);
-      setLoading(false);
-      return;
-    }
-    const data = await res.json() as { items: QueueItem[] };
-    setItems(data.items ?? []);
-    setLoading(false);
+  // Initial load: fetch the queue and update state.
+  // setState calls are in .then()/.catch() callbacks — allowed by react-hooks/set-state-in-effect.
+  // The rule only disallows synchronous setState calls in the effect body itself.
+  useEffect(() => {
+    fetch('/api/admin/queue')
+      .then(async (res) => {
+        if (res.status === 404) {
+          setNotFound(true);
+          setLoading(false);
+          return;
+        }
+        const data = await res.json() as { items: QueueItem[] };
+        setItems(data.items ?? []);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
   }, []);
-
-  useEffect(() => { load(); }, [load]);
 
   async function handleAction(lessonId: string, action: 'retry' | 'dismiss') {
     setActionStates((s) => ({ ...s, [lessonId]: 'loading' }));

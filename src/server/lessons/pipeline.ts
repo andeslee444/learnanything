@@ -214,7 +214,16 @@ async function deliver(
     .returning({ id: s.lessons.id });
   if (rows.length === 0) return { status: 'skipped' as const };
   const holdId = await findHoldId(db, lessonId);
-  if (holdId) await captureHold(db, holdId).catch((err) => console.error('capture failed', err));
+  if (holdId) await captureHold(db, holdId).catch((err: unknown) => {
+    // Admin retries reuse the old refunded hold (findHoldId finds the most-recent hold entry).
+    // captureHold on an already-settled/refunded hold throws "already settled" — this is
+    // expected and not an error. Log debug to avoid noisy false-positive alerts in CI/prod.
+    if (err instanceof Error && err.message.includes('already settled')) {
+      console.debug('[capture] hold already settled — admin retry, skipping capture');
+      return;
+    }
+    console.error('capture failed', err);
+  });
   // Fire-and-forget: start the async verification workflow after capture.
   // The lesson is already usable (status='ready') — verification happens asynchronously.
   start(verifyLessonWorkflow, [lessonId]).catch((err: unknown) => {

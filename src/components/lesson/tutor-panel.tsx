@@ -57,6 +57,8 @@ export function TutorPanel({ lessonId }: TutorPanelProps) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // crisisActive intentionally persists for the session once triggered (no dismiss) —
+  // the resources panel stays visible until the learner navigates away. Spec §6 intent.
   const [crisisActive, setCrisisActive] = useState(false);
   const liveRef = useRef<HTMLParagraphElement | null>(null);
 

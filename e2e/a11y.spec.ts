@@ -21,7 +21,7 @@
  *     component injects problematic inline CSS we cannot change, document here.
  */
 
-import { test, expect } from '@playwright/test';
+import { type Page, test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { signUpAndOnboard } from './helpers';
 
@@ -35,7 +35,7 @@ import { signUpAndOnboard } from './helpers';
  * Exclusions are documented inline where applied.
  */
 async function assertA11y(
-  page: Parameters<typeof AxeBuilder>[0],
+  page: Page,
   options?: { disabledRules?: string[] },
 ) {
   const builder = new AxeBuilder({ page })
@@ -101,8 +101,6 @@ test('a11y: /login', async ({ page }) => {
 test.describe('a11y: authenticated pages (shared signup)', () => {
   // Shared state within this group
   let trackUrl: string;
-  let lessonUrl: string;
-  let libraryUrl: string;
 
   // Perform onboarding once, drive to lesson, complete lesson, then axe each page.
   // We use `test.beforeAll` to share setup across tests in this describe block.
@@ -126,7 +124,7 @@ test.describe('a11y: authenticated pages (shared signup)', () => {
     await expect(page).toHaveURL(/\/tracks\/[^/]+\/lessons\/[^/]+$/, { timeout: 15_000 });
     // Wait for lesson to be ready (article block visible)
     await expect(page.getByTestId('article-block').first()).toBeVisible({ timeout: 60_000 });
-    lessonUrl = page.url();
+    // lessonUrl captured for potential future tests
 
     // ── Lesson page axe check ─────────────────────────────────────
     // Disable 'color-contrast' rule for lesson content rendered via streamdown — the
@@ -152,7 +150,7 @@ test.describe('a11y: authenticated pages (shared signup)', () => {
     await expect(page.getByTestId('library-link')).toBeVisible({ timeout: 10_000 });
     await page.getByTestId('library-link').click();
     await expect(page).toHaveURL(/\/tracks\/[^/]+\/library$/, { timeout: 15_000 });
-    libraryUrl = page.url();
+    // libraryUrl captured for potential future tests
 
     // ── Library page axe check ────────────────────────────────────
     await expect(page.getByTestId('library')).toBeVisible({ timeout: 10_000 });

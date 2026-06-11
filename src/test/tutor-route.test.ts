@@ -5,8 +5,12 @@
  * 1. isCrisisMessage deterministic pre-check (all keywords).
  * 2. Fixture path — fake LLM returns the tutor fixture reply.
  * 3. Alert seam spied: crisis → alertFounder('crisis', {lessonId}) — no message content.
- * 4. Moderation-flagged message → 422.
+ * 4. Moderation-flagged message → declined.
  * 5. Route debounce — second request within 5s → 429.
+ * 6. handleTutorMessage — REAL unit tests:
+ *    a. Crisis keyword → crisis response with NO moderation/LLM call (spy proves it).
+ *    b. Normal message → moderation runs then tutor reply.
+ *    c. Flagged non-crisis message → declined.
  *
  * NOTE: Crisis path is unit-tested here rather than in e2e to avoid crisis-keyword
  * traffic in test logs and to keep the keyword list deterministic without a real LLM.
@@ -151,8 +155,171 @@ describe('tutor route — debounce constant', () => {
     // The route uses 5s debounce — same as concreteness/tracks.
     // This is a smoke test verifying the module imports without error.
     const routeModule = await import('@/app/api/lessons/[lessonId]/tutor/route');
-    // isCrisisMessage and POST are exported — sanity check the module loaded
+    // isCrisisMessage, handleTutorMessage and POST are exported — sanity check the module loaded
     expect(typeof routeModule.isCrisisMessage).toBe('function');
+    expect(typeof routeModule.handleTutorMessage).toBe('function');
     expect(typeof routeModule.POST).toBe('function');
+  });
+});
+
+// ── handleTutorMessage — REAL unit tests ──────────────────────────────────────
+// These tests use spy/mock to prove the ordering guarantee:
+//   crisis keyword → NO moderation call, NO LLM call, static safe reply returned.
+//   normal message → moderation runs, then LLM call, reply returned.
+//   flagged message → moderation_declined=true, no LLM call.
+
+describe('handleTutorMessage — crisis pre-check ordering (spy/mock proves no moderation/LLM call)', () => {
+  beforeEach(() => {
+    process.env.AI_FAKE_LLM = '0'; // real path to expose spy violations
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+    vi.doUnmock('@/server/moderation');
+    vi.doUnmock('@/lib/ai');
+    vi.doUnmock('@/lib/alerts');
+    process.env.AI_FAKE_LLM = '1';
+  });
+
+  it('crisis keyword → crisis=true with static reply, moderateText NOT called, llmObject NOT called', async () => {
+    const moderateCalls: string[] = [];
+    const llmCalls: string[] = [];
+    const alertCalls: Array<[string, Record<string, unknown>]> = [];
+
+    vi.doMock('@/server/moderation', () => ({
+      moderateText: vi.fn().mockImplementation(async (text: string) => {
+        moderateCalls.push(text);
+        return { allowed: true, reason: 'ok' };
+      }),
+    }));
+    vi.doMock('@/lib/ai', () => ({
+      llmObject: vi.fn().mockImplementation(async () => {
+        llmCalls.push('called');
+        return { reply: 'hint', crisis: false };
+      }),
+    }));
+    vi.doMock('@/lib/alerts', () => ({
+      alertFounder: vi.fn().mockImplementation((kind: string, payload: Record<string, unknown>) => {
+        alertCalls.push([kind, payload]);
+      }),
+    }));
+
+    const { handleTutorMessage } = await import('@/app/api/lessons/[lessonId]/tutor/route');
+
+    // Provide a minimal db stub — the crisis path never reaches DB
+    const fakeDb = {
+      select: vi.fn().mockReturnThis(),
+      from: vi.fn().mockReturnThis(),
+      where: vi.fn().mockResolvedValue([]),
+    } as unknown as Parameters<typeof handleTutorMessage>[0];
+
+    const result = await handleTutorMessage(fakeDb, {
+      lessonId: 'lesson-abc',
+      learnerId: 'learner-xyz',
+      ageBand: '18_plus',
+      message: 'I want to kill myself',
+    });
+
+    // Crisis response returned
+    expect(result.crisis).toBe(true);
+    expect(result.reply.length).toBeGreaterThan(0);
+
+    // CRITICAL: moderation must NOT have been called
+    expect(moderateCalls).toHaveLength(0);
+
+    // CRITICAL: LLM must NOT have been called
+    expect(llmCalls).toHaveLength(0);
+
+    // Alert fired with lessonId but no message content
+    expect(alertCalls).toHaveLength(1);
+    expect(alertCalls[0][0]).toBe('crisis');
+    expect(alertCalls[0][1]).toHaveProperty('lessonId', 'lesson-abc');
+    expect(JSON.stringify(alertCalls[0][1])).not.toContain('kill myself');
+  });
+
+  it('normal message → moderateText called, then llmObject called, crisis=false', async () => {
+    const moderateCalls: string[] = [];
+    const llmCalls: string[] = [];
+
+    vi.doMock('@/server/moderation', () => ({
+      moderateText: vi.fn().mockImplementation(async (text: string) => {
+        moderateCalls.push(text);
+        return { allowed: true, reason: 'ok' };
+      }),
+    }));
+    vi.doMock('@/lib/ai', () => ({
+      llmObject: vi.fn().mockImplementation(async () => {
+        llmCalls.push('called');
+        return { reply: 'Think about what the box holds', crisis: false };
+      }),
+    }));
+    vi.doMock('@/lib/alerts', () => ({
+      alertFounder: vi.fn(),
+    }));
+
+    const { handleTutorMessage } = await import('@/app/api/lessons/[lessonId]/tutor/route');
+
+    const fakeDb = {
+      select: vi.fn().mockReturnThis(),
+      from: vi.fn().mockReturnThis(),
+      where: vi.fn().mockResolvedValue([{ content: { blocks: [] }, spec: { objective: 'test' } }]),
+    } as unknown as Parameters<typeof handleTutorMessage>[0];
+
+    const result = await handleTutorMessage(fakeDb, {
+      lessonId: 'lesson-def',
+      learnerId: 'learner-xyz',
+      ageBand: '18_plus',
+      message: 'What is a variable?',
+    });
+
+    expect(result.crisis).toBe(false);
+    expect(result.reply).toBe('Think about what the box holds');
+
+    // Moderation was called
+    expect(moderateCalls).toHaveLength(1);
+    expect(moderateCalls[0]).toBe('What is a variable?');
+
+    // LLM was called
+    expect(llmCalls).toHaveLength(1);
+  });
+
+  it('flagged non-crisis message → moderation_declined=true, llmObject NOT called', async () => {
+    const llmCalls: string[] = [];
+
+    vi.doMock('@/server/moderation', () => ({
+      moderateText: vi.fn().mockResolvedValue({ allowed: false, reason: 'flagged content' }),
+    }));
+    vi.doMock('@/lib/ai', () => ({
+      llmObject: vi.fn().mockImplementation(async () => {
+        llmCalls.push('called');
+        return { reply: 'hint', crisis: false };
+      }),
+    }));
+    vi.doMock('@/lib/alerts', () => ({
+      alertFounder: vi.fn(),
+    }));
+
+    const { handleTutorMessage } = await import('@/app/api/lessons/[lessonId]/tutor/route');
+
+    const fakeDb = {
+      select: vi.fn().mockReturnThis(),
+      from: vi.fn().mockReturnThis(),
+      where: vi.fn().mockResolvedValue([]),
+    } as unknown as Parameters<typeof handleTutorMessage>[0];
+
+    const result = await handleTutorMessage(fakeDb, {
+      lessonId: 'lesson-ghi',
+      learnerId: 'learner-xyz',
+      ageBand: '18_plus',
+      message: 'some flagged content',
+    });
+
+    expect(result.moderation_declined).toBe(true);
+    expect(result.crisis).toBe(false);
+
+    // LLM must NOT have been called
+    expect(llmCalls).toHaveLength(0);
   });
 });

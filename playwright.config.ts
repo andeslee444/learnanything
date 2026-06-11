@@ -9,7 +9,7 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 60_000,
   use: { baseURL: 'http://localhost:3100' },
-  workers: 1, // single spec file, no parallelism to avoid debounce collisions
+  workers: 1, // no parallelism — multiple specs share one server; avoids debounce collisions and auth-state races
   webServer: {
     command: 'npm run dev -- --port 3100',
     url: 'http://localhost:3100',

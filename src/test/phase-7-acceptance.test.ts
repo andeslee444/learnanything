@@ -26,7 +26,7 @@
  * Fake LLM (AI_FAKE_LLM=1) — no real model calls.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { eq, isNull } from 'drizzle-orm';
 import { testDb, testPool, resetDb } from '@/test/db';
 import * as s from '@/db/schema';

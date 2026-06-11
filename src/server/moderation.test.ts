@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import * as alertsModule from '@/lib/alerts';
 
 // ── fake mode: allowed ────────────────────────────────────────────────────────
 
