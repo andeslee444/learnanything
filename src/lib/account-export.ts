@@ -9,11 +9,27 @@
  * learning-record timeline.
  *
  * Testable without HTTP; the API routes are thin wrappers.
+ *
+ * Security: learner-controlled text (record bodies, glossary definitions,
+ * mission why/success criteria) is rendered as blockquotes in Markdown output
+ * via quoteMd() to prevent structural injection into the exported document.
  */
 
 import { eq, and, or, inArray, isNull } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as s from '@/db/schema';
+
+/**
+ * Renders user-controlled text as a Markdown blockquote. Prefixes every line
+ * with '> ' so multi-line content cannot break document structure or inject
+ * headings/links into the exported file.
+ */
+function quoteMd(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => `> ${line}`)
+    .join('\n');
+}
 
 type Db = NodePgDatabase<typeof s>;
 
@@ -163,8 +179,23 @@ async function buildJsonExport(db: Db, userId: string): Promise<ExportResult> {
         })
       );
 
-      // Attempt events for lessons in this track
+      // Resource gaps for this track
+      const resourceGaps = await db
+        .select()
+        .from(s.resourceGaps)
+        .where(eq(s.resourceGaps.trackId, track.id));
+
+      // Shared lessons for lessons in this track (lesson → sharedLesson 1:1)
       const lessonIds = lessons.map((l) => l.id);
+      const sharedLessons =
+        lessonIds.length > 0
+          ? await db
+              .select()
+              .from(s.sharedLessons)
+              .where(inArray(s.sharedLessons.lessonId, lessonIds))
+          : [];
+
+      // Attempt events for lessons in this track
       const attemptEvents =
         lessonIds.length > 0
           ? await db
@@ -223,8 +254,10 @@ async function buildJsonExport(db: Db, userId: string): Promise<ExportResult> {
         learningRecords,
         glossaryTerms,
         resources,
+        resourceGaps,
         referenceDocs,
         lessons: lessonsWithDetails,
+        sharedLessons,
         attemptEvents,
         reviewCards: reviewCardsWithLog,
       });
@@ -315,7 +348,9 @@ async function buildMarkdownExport(db: Db, userId: string): Promise<ExportResult
 
     if (mission) {
       lines.push(`### Mission`);
-      lines.push(`**Why:** ${mission.whyText}\n`);
+      lines.push(`**Why:**`);
+      lines.push(quoteMd(mission.whyText));
+      lines.push('');
     }
 
     // Glossary
@@ -327,7 +362,8 @@ async function buildMarkdownExport(db: Db, userId: string): Promise<ExportResult
     if (glossaryTerms.length > 0) {
       lines.push(`### Terms you own`);
       for (const term of glossaryTerms) {
-        lines.push(`- **${term.term}** — ${term.definition}`);
+        lines.push(`- **${term.term}**`);
+        lines.push(quoteMd(term.definition));
         if (term.ambiguityNote) lines.push(`  _Note: ${term.ambiguityNote}_`);
       }
       lines.push('');
@@ -359,7 +395,7 @@ async function buildMarkdownExport(db: Db, userId: string): Promise<ExportResult
       for (const rec of sorted) {
         const status = rec.status === 'superseded' ? ' _(superseded)_' : '';
         lines.push(`${rec.seq}. **${rec.title}**${status}`);
-        lines.push(`   ${rec.body}`);
+        lines.push(quoteMd(rec.body));
       }
       lines.push('');
     }

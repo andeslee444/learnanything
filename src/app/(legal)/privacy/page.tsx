@@ -92,7 +92,9 @@ export default function PrivacyPage() {
           <li>
             <strong>Delete anytime.</strong> You can permanently delete your account and all
             associated data with one click. We retain encrypted backups for up to 30 days after
-            deletion, after which your data is permanently unrecoverable.
+            deletion, after which your data is permanently unrecoverable. Note: payment records
+            are retained by our payment processor (Stripe) under their own policies; anonymized
+            research-topic caches that are not tied to your identity may persist.
           </li>
         </ul>
       </section>

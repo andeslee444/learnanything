@@ -33,8 +33,15 @@ export function DataSection() {
         body: JSON.stringify({ confirm: 'DELETE' }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
-        setErrorMessage(body.error ?? 'Delete failed — please try again.');
+        const body = await res.json().catch(() => ({})) as { error?: string; message?: string };
+        if (body.error === 'active_subscription') {
+          setErrorMessage(
+            body.message ??
+              'Cancel your subscription in the billing portal before deleting your account.'
+          );
+        } else {
+          setErrorMessage(body.message ?? body.error ?? 'Delete failed — please try again.');
+        }
         setDeleteState('error');
         return;
       }
@@ -79,7 +86,9 @@ export function DataSection() {
         <p className="mt-1 text-sm text-ink-700">
           Permanently delete your account and all data. This action cannot be undone. Encrypted
           backups are retained for up to 30 days after deletion, after which all data is
-          permanently unrecoverable.
+          permanently unrecoverable.{' '}
+          If you have an active subscription, cancel it first — deleting your account does not
+          cancel Stripe billing.
         </p>
         <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
           <div className="flex flex-col gap-1">

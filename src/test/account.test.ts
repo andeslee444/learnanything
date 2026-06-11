@@ -13,11 +13,13 @@
  * 4. Learner B's data absent from learner A's markdown.
  *
  * deleteAccount cascade (FULL world):
- * 5. Seed: user→learner→track→mission→mission_revision→skill_node→
- *         skill_node_edge→learning_record→glossary_term→resource→
- *         reference_doc→lesson→narration→verification_result→
- *         attempt_event→review_card→review_log→ledger_row→billing_customer.
- *    Delete user via deleteAccount(). Assert ZERO rows in every table for that user.
+ * 5. Seed: user→session→account→learner→track→mission→mission_revision→
+ *         skill_node→skill_node_edge→learning_record→glossary_term→resource→
+ *         resource_gap→reference_doc→lesson→shared_lesson→narration→
+ *         verification_result→attempt_event→review_card→review_log→
+ *         concept_ability→ledger_row→billing_customer.
+ *    Delete user via deleteAccount(). Assert ZERO rows in every user-reachable
+ *    table in src/db/schema.
  *    A parallel "bystander" world is untouched.
  *
  * Confirm-string guard:
@@ -50,7 +52,8 @@ afterAll(() => testPool.end());
 
 /**
  * Seeds a FULL world for one user: every table that is reachable from the user
- * row and should be deleted when the user is deleted.
+ * row and should be deleted when the user is deleted (every user-reachable
+ * table in src/db/schema).
  */
 async function seedFullWorld(suffix: string) {
   const uid = crypto.randomUUID();
@@ -60,6 +63,31 @@ async function seedFullWorld(suffix: string) {
   const [user] = await testDb
     .insert(s.user)
     .values({ id: uid, name: 'Account-' + suffix, email })
+    .returning();
+
+  // session (Better-Auth — FK → user.id ON DELETE CASCADE)
+  const sessionId = 'sess-' + uid;
+  const [sessionRow] = await testDb
+    .insert(s.session)
+    .values({
+      id: sessionId,
+      token: 'tok-' + uid,
+      userId: user.id,
+      expiresAt: new Date(Date.now() + 86_400_000),
+    })
+    .returning();
+
+  // account (Better-Auth — FK → user.id ON DELETE CASCADE)
+  const accountId = 'acct-' + uid;
+  const [accountRow] = await testDb
+    .insert(s.account)
+    .values({
+      id: accountId,
+      accountId: uid,
+      providerId: 'credential',
+      userId: user.id,
+      password: 'hashed-placeholder',
+    })
     .returning();
 
   // learner
@@ -207,6 +235,35 @@ async function seedFullWorld(suffix: string) {
     })
     .returning();
 
+  // resource gap (FK → tracks ON DELETE CASCADE)
+  const [resourceGap] = await testDb
+    .insert(s.resourceGaps)
+    .values({
+      trackId: track.id,
+      description: 'Missing advanced async material ' + suffix,
+    })
+    .returning();
+
+  // shared lesson (FK → lessons ON DELETE CASCADE)
+  const [sharedLesson] = await testDb
+    .insert(s.sharedLessons)
+    .values({
+      lessonId: lesson.id,
+      sanitizedContent: { blocks: [] },
+      slug: 'async-basics-' + uid.slice(0, 8),
+    })
+    .returning();
+
+  // concept ability (FK → learners ON DELETE CASCADE)
+  const [conceptAbilityRow] = await testDb
+    .insert(s.conceptAbility)
+    .values({
+      learnerId: learner.id,
+      conceptKey: 'tokio-basics-' + suffix,
+      rating: 0.7,
+    })
+    .returning();
+
   // review card (backed by glossary term)
   const [reviewCard] = await testDb
     .insert(s.reviewCards)
@@ -251,6 +308,8 @@ async function seedFullWorld(suffix: string) {
 
   return {
     user,
+    sessionRow,
+    accountRow,
     learner,
     track,
     mission,
@@ -261,11 +320,14 @@ async function seedFullWorld(suffix: string) {
     skillNode2,
     skillNodeEdge,
     resource,
+    resourceGap,
     referenceDoc,
     lesson,
+    sharedLesson,
     narration,
     verificationResult,
     attemptEvent,
+    conceptAbilityRow,
     reviewCard,
     reviewLogEntry,
     ledgerRow,
@@ -276,7 +338,7 @@ async function seedFullWorld(suffix: string) {
 // ── 1-2. buildExport JSON shape ────────────────────────────────────────────────
 
 describe('buildExport — JSON shape', () => {
-  it('1. contains user email, track topic, a learning record, a glossary term, ledger rows', async () => {
+  it('1. contains user email, track topic, a learning record, a glossary term, ledger rows, resource_gaps, shared_lessons', async () => {
     const world = await seedFullWorld('json1');
     const result = await buildExport(testDb, world.user.id, 'json');
 
@@ -289,6 +351,8 @@ describe('buildExport — JSON shape', () => {
         track: { topic: string };
         learningRecords: Array<{ body: string }>;
         glossaryTerms: Array<{ term: string }>;
+        resourceGaps: Array<{ description: string }>;
+        sharedLessons: Array<{ id: string }>;
       }>;
       creditLedger: Array<{ entryType: string }>;
     };
@@ -299,6 +363,12 @@ describe('buildExport — JSON shape', () => {
     expect(doc.tracks[0].learningRecords.some((r) => r.body.includes(world.record.body))).toBe(true);
     expect(doc.tracks[0].glossaryTerms.some((g) => g.term === world.glossaryTerm.term)).toBe(true);
     expect(doc.creditLedger.some((l) => l.entryType === 'grant')).toBe(true);
+    // resource_gaps must appear in the per-track export
+    expect(doc.tracks[0].resourceGaps).toHaveLength(1);
+    expect(doc.tracks[0].resourceGaps[0].description).toContain(world.resourceGap.description);
+    // shared_lessons must appear in the per-track export
+    expect(doc.tracks[0].sharedLessons).toHaveLength(1);
+    expect(doc.tracks[0].sharedLessons[0].id).toBe(world.sharedLesson.id);
   });
 
   it('2. learner B data absent from learner A export', async () => {
@@ -314,6 +384,9 @@ describe('buildExport — JSON shape', () => {
     expect(docA.user.email).toBe(worldA.user.email);
     expect(docA.user.email).not.toBe(worldB.user.email);
     expect(docA.tracks.every((t) => !t.track?.topic?.includes('json-b'))).toBe(true);
+    // Whole-body leakage check: no json-b suffix anywhere in the document.
+    expect(resultA.body).not.toContain('json-b');
+    expect(resultA.body).not.toContain(worldB.user.email);
   });
 });
 
@@ -341,6 +414,9 @@ describe('buildExport — Markdown shape', () => {
     const resultA = await buildExport(testDb, worldA.user.id, 'markdown');
     expect(resultA.body).toContain(worldA.track.topic);
     expect(resultA.body).not.toContain(worldB.track.topic);
+    // Whole-body leakage check: no md-b suffix or B's email anywhere in the document.
+    expect(resultA.body).not.toContain('md-b');
+    expect(resultA.body).not.toContain(worldB.user.email);
   });
 });
 
@@ -368,8 +444,17 @@ describe('deleteAccount — full cascade', () => {
       testDb.select().from(s.user).where(eq(s.user.id, target.user.id))
     );
 
-    // Sessions (cascade from user) — sessions may be empty if none were created in seed,
-    // but the FK is correct. We verify the table doesn't error.
+    // session (cascade from user)
+    await assertGone('session', () =>
+      testDb.select().from(s.session).where(eq(s.session.id, target.sessionRow.id))
+    );
+
+    // account (cascade from user)
+    await assertGone('account', () =>
+      testDb.select().from(s.account).where(eq(s.account.id, target.accountRow.id))
+    );
+
+    // learners (cascade from user)
     await assertGone('learners', () =>
       testDb.select().from(s.learners).where(eq(s.learners.userId, target.user.id))
     );
@@ -418,6 +503,13 @@ describe('deleteAccount — full cascade', () => {
       testDb.select().from(s.resources).where(eq(s.resources.id, target.resource.id))
     );
 
+    await assertGone('resource_gaps', () =>
+      testDb
+        .select()
+        .from(s.resourceGaps)
+        .where(eq(s.resourceGaps.id, target.resourceGap.id))
+    );
+
     await assertGone('reference_docs', () =>
       testDb
         .select()
@@ -427,6 +519,13 @@ describe('deleteAccount — full cascade', () => {
 
     await assertGone('lessons', () =>
       testDb.select().from(s.lessons).where(eq(s.lessons.id, target.lesson.id))
+    );
+
+    await assertGone('shared_lessons', () =>
+      testDb
+        .select()
+        .from(s.sharedLessons)
+        .where(eq(s.sharedLessons.id, target.sharedLesson.id))
     );
 
     await assertGone('lesson_narrations', () =>
@@ -461,6 +560,13 @@ describe('deleteAccount — full cascade', () => {
         .where(eq(s.reviewLog.id, target.reviewLogEntry.id))
     );
 
+    await assertGone('concept_ability', () =>
+      testDb
+        .select()
+        .from(s.conceptAbility)
+        .where(eq(s.conceptAbility.id, target.conceptAbilityRow.id))
+    );
+
     await assertGone('credit_ledger', () =>
       testDb
         .select()
@@ -485,6 +591,12 @@ describe('deleteAccount — full cascade', () => {
     await assertPresent('bystander user', () =>
       testDb.select().from(s.user).where(eq(s.user.id, bystander.user.id))
     );
+    await assertPresent('bystander session', () =>
+      testDb.select().from(s.session).where(eq(s.session.id, bystander.sessionRow.id))
+    );
+    await assertPresent('bystander account', () =>
+      testDb.select().from(s.account).where(eq(s.account.id, bystander.accountRow.id))
+    );
     await assertPresent('bystander learner', () =>
       testDb.select().from(s.learners).where(eq(s.learners.id, bystander.learner.id))
     );
@@ -496,6 +608,24 @@ describe('deleteAccount — full cascade', () => {
     );
     await assertPresent('bystander lesson', () =>
       testDb.select().from(s.lessons).where(eq(s.lessons.id, bystander.lesson.id))
+    );
+    await assertPresent('bystander shared_lesson', () =>
+      testDb
+        .select()
+        .from(s.sharedLessons)
+        .where(eq(s.sharedLessons.id, bystander.sharedLesson.id))
+    );
+    await assertPresent('bystander resource_gap', () =>
+      testDb
+        .select()
+        .from(s.resourceGaps)
+        .where(eq(s.resourceGaps.id, bystander.resourceGap.id))
+    );
+    await assertPresent('bystander concept_ability', () =>
+      testDb
+        .select()
+        .from(s.conceptAbility)
+        .where(eq(s.conceptAbility.id, bystander.conceptAbilityRow.id))
     );
     await assertPresent('bystander ledger', () =>
       testDb
@@ -593,6 +723,83 @@ describe('POST /api/account/delete — confirm string guard', () => {
     });
     const res = await POST(req);
     expect(res.status).toBe(400);
+
+    vi.resetModules();
+  });
+});
+
+// ── Active-subscription delete guard ──────────────────────────────────────────
+
+describe('POST /api/account/delete — active-subscription guard', () => {
+  it('11. active subscription → 409, user row still present', async () => {
+    const world = await seedFullWorld('active-sub-guard');
+    // seedFullWorld inserts a billing_customers row with subscriptionStatus = 'active'
+
+    vi.resetModules();
+    vi.doMock('@/lib/auth', () => ({
+      auth: {
+        api: {
+          getSession: vi.fn().mockResolvedValue({ user: { id: world.user.id } }),
+        },
+      },
+    }));
+    vi.doMock('next/headers', () => ({
+      headers: vi.fn().mockResolvedValue(new Headers()),
+    }));
+
+    const { createPostHandler } = await import('@/app/api/account/delete/route');
+    const POST = createPostHandler(testDb);
+    const req = new NextRequest('http://localhost/api/account/delete', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: 'DELETE' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(409);
+    const body = await res.json() as { error: string; message: string };
+    expect(body.error).toBe('active_subscription');
+    expect(body.message).toContain('Cancel your subscription');
+
+    // User must still exist
+    const [still] = await testDb.select().from(s.user).where(eq(s.user.id, world.user.id));
+    expect(still).toBeDefined();
+
+    vi.resetModules();
+  });
+
+  it('12. canceled subscription → delete proceeds (200)', async () => {
+    const world = await seedFullWorld('canceled-sub-guard');
+    // Update billing status to 'canceled'
+    await testDb
+      .update(s.billingCustomers)
+      .set({ subscriptionStatus: 'canceled' })
+      .where(eq(s.billingCustomers.userId, world.user.id));
+
+    vi.resetModules();
+    vi.doMock('@/lib/auth', () => ({
+      auth: {
+        api: {
+          getSession: vi.fn().mockResolvedValue({ user: { id: world.user.id } }),
+        },
+      },
+    }));
+    vi.doMock('next/headers', () => ({
+      headers: vi.fn().mockResolvedValue(new Headers()),
+    }));
+
+    const { createPostHandler } = await import('@/app/api/account/delete/route');
+    const POST = createPostHandler(testDb);
+    const req = new NextRequest('http://localhost/api/account/delete', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: 'DELETE' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+
+    // User must be gone
+    const rows = await testDb.select().from(s.user).where(eq(s.user.id, world.user.id));
+    expect(rows).toHaveLength(0);
 
     vi.resetModules();
   });

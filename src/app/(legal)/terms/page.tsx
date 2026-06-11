@@ -86,7 +86,9 @@ export default function TermsPage() {
           <li>
             <strong>Cancellation</strong> — you may cancel your subscription at any time. Your
             subscription remains active until the end of the paid period. Credits already granted
-            for the current period remain available until they expire.
+            for the current period remain available until they expire. If you wish to delete your
+            account, you must cancel your subscription first — account deletion does not
+            automatically cancel your Stripe subscription.
           </li>
         </ul>
       </section>
