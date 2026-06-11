@@ -49,8 +49,8 @@ export function BillingActions({ subscriptionStatus, balance }: Props) {
       if (res.status === 409) {
         // Already subscribed — refresh so the server component re-reads DB.
         // Wrap in startTransition so isPending stays true until the re-render
-        // lands; the hint renders only while isPending and auto-clears via the
-        // useEffect above when subscriptionStatus flips to 'active'.
+        // lands; the hint renders only while isPending, so it disappears once
+        // the refresh completes and the button flips to "Manage subscription".
         setState({ kind: 'already_subscribed' });
         startTransition(() => { router.refresh(); });
         return;

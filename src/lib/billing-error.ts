@@ -5,7 +5,7 @@
  * user-friendly strings safe to display in the UI.
  *
  * Known codes:
- *   'unauthenticated'  — Cognito session missing / expired (401)
+ *   'unauthenticated'  — Better-Auth session missing / expired (401)
  *   'no_subscription'  — portal called with no billing_customers row (404)
  *   anything else      — generic fallback
  */

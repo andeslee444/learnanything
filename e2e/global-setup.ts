@@ -9,7 +9,7 @@
  */
 import type { FullConfig } from '@playwright/test';
 
-const WARM_ROUTES = ['/', '/signup', '/login', '/tracks', '/reviews'];
+const WARM_ROUTES = ['/', '/signup', '/login', '/tracks', '/reviews', '/billing', '/privacy', '/terms'];
 
 export default async function globalSetup(config: FullConfig) {
   const baseURL = config.projects[0]?.use?.baseURL ?? 'http://localhost:3100';

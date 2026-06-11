@@ -79,7 +79,7 @@ export default async function BillingPage({
           aria-live="polite"
         >
           <p className="text-sm font-medium text-sky-700">
-            Subscription activated — your credits have been added.
+            Subscription activated — your 30 credits will appear within a minute.
           </p>
         </div>
       )}

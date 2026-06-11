@@ -20,7 +20,7 @@ let _stripe: Stripe | null = null;
 /**
  * Returns the shared Stripe instance, or null when STRIPE_SECRET_KEY is unset.
  * Lazy singleton: first call initialises; subsequent calls return the same instance.
- * Never throws — callers must check for null and return 503/BillingUnavailableError.
+ * Never throws — callers must check for null and return a 503 JSON response.
  */
 export function getStripe(): Stripe | null {
   const key = process.env.STRIPE_SECRET_KEY;
@@ -39,10 +39,3 @@ export function _resetStripeForTests(): void {
   _stripe = null;
 }
 
-/** Thrown by billing routes when STRIPE_SECRET_KEY is absent. */
-export class BillingUnavailableError extends Error {
-  constructor() {
-    super('Billing is not configured');
-    this.name = 'BillingUnavailableError';
-  }
-}
