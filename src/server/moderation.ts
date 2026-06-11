@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { LanguageModel } from 'ai';
 import { llmObject } from '@/lib/ai';
 
 const moderationSchema = z.object({
@@ -25,10 +26,14 @@ export function moderationMaxChars(context: 'learning_request' | 'retrieved_cont
  *   - learning_request: 4000 chars
  *   - retrieved_content: 16000 chars (extraction claims+quotes JSON can run ~12k)
  *   - assembled_lesson: 16000 chars (full lesson JSON including article blocks and quiz items)
+ *
+ * @param modelOverride — optional model override (for tests using MockLanguageModelV3 or
+ *   sequential mocks that need to control the moderation response).
  */
 export async function moderateText(
   text: string,
-  context: 'learning_request' | 'retrieved_content' | 'assembled_lesson'
+  context: 'learning_request' | 'retrieved_content' | 'assembled_lesson',
+  opts?: { modelOverride?: LanguageModel },
 ): Promise<ModerationResult> {
   const maxChars = moderationMaxChars(context);
   try {
@@ -38,6 +43,7 @@ export async function moderateText(
       schema: moderationSchema,
       system: MODERATION_SYSTEM,
       prompt: `Context: ${context}\n<text>\n${text.slice(0, maxChars)}\n</text>`,
+      modelOverride: opts?.modelOverride,
     });
     return result;
   } catch (err) {

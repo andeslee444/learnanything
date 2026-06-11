@@ -21,7 +21,7 @@
 import 'dotenv/config';
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -31,12 +31,18 @@ import { lessonContentSchema } from '../src/server/lessons/blocks.js';
 import { validateLessonContent } from '../src/server/lessons/validate.js';
 import { stripContentAnswerKey } from '../src/app/api/lessons/[lessonId]/route.js';
 import { distillLesson } from '../src/server/lessons/distiller.js';
+import { verifyBlock } from '../src/server/lessons/verify.js';
+import { pickArticleIndexes, computeFinalize, maybeAlertFaithfulness } from '../src/server/lessons/verdicts.js';
 
 // ── flags ─────────────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
 const isLive = args.includes('--live');
 const isYes = args.includes('--yes');
+
+// Compute a unique run ID at startup (base36 timestamp).
+// This ensures emails and names are unique even if the script crashes and re-runs.
+const RUN_ID = Date.now().toString(36);
 
 if (isLive && !isYes) {
   console.error(
@@ -83,6 +89,18 @@ function loadCases(): EvalCase[] {
   return parsed as EvalCase[];
 }
 
+// ── orphan sweep ─────────────────────────────────────────────────────────────
+// Clean up any orphaned eval users from prior crashed runs. This ensures no
+// unique email constraint collisions when fixture users are created.
+// Deletes all users with email matching 'eval-*@eval.internal' pattern.
+
+async function sweepOrphanFixtures(db: ReturnType<typeof drizzle>) {
+  const result = await db.delete(s.user)
+    .where(sql`${s.user.email} LIKE 'eval-%@eval.internal'`);
+  // result is a Delete statement object; call it to execute
+  return result;
+}
+
 // ── trust-domain seeds ────────────────────────────────────────────────────────
 // Minimal allowlist: fixture pipeline uses sources from these domains (matching
 // the fake 'vet-sources' fixture which trusts docs.python.org + MDN + realpython.com).
@@ -109,15 +127,15 @@ type Db = ReturnType<typeof drizzle<typeof s>>;
 
 async function buildFixture(db: Db, c: EvalCase) {
   return await db.transaction(async (tx) => {
-    // user
+    // user (email and name are scoped by RUN_ID to avoid collisions from prior crashed runs)
     const userId = crypto.randomUUID();
     const [user] = await tx.insert(s.user)
-      .values({ id: userId, name: `eval-${c.id}`, email: `eval-${c.id}@eval.internal` })
+      .values({ id: userId, name: `eval-${c.id}-${RUN_ID}`, email: `eval-${c.id}-${RUN_ID}@eval.internal` })
       .returning();
 
     // learner
     const [learner] = await tx.insert(s.learners)
-      .values({ userId: user.id, displayName: `eval-${c.id}`, ageBand: '18_plus' })
+      .values({ userId: user.id, displayName: `eval-${c.id}-${RUN_ID}`, ageBand: '18_plus' })
       .returning();
 
     // track
@@ -188,6 +206,8 @@ interface CaseChecks {
   distillerProducesRecords: boolean;
   glossaryPromoted: boolean;
   referenceDocCreated: boolean;
+  // Phase 6: verification checks
+  lessonVerified: boolean;
 }
 
 interface CaseResult {
@@ -219,6 +239,7 @@ async function runCase(db: Db, c: EvalCase): Promise<CaseResult> {
     distillerProducesRecords: false,
     glossaryPromoted: false,
     referenceDocCreated: false,
+    lessonVerified: false,
   };
 
   let userId: string | null = null;
@@ -321,6 +342,70 @@ async function runCase(db: Db, c: EvalCase): Promise<CaseResult> {
         console.error(`[${c.id}] distiller check exception:`, distillErr);
         // Checks remain false
       }
+
+      // ── Phase 6: lessonVerified check ─────────────────────────────────────
+      // Run the verify sequence post-pipeline (seed → verifyBlock → finalize).
+      // In fake mode: all claims return 'supported', so score = 1.0 and status = 'verified'.
+      // Assert: faithfulnessScore >= 0.8 AND verificationStatus === 'verified'.
+      try {
+        if (delivered.status === 'ready') {
+          const content = contentParse.data;
+
+          // Step 1: Find article block indexes using shared pure helper
+          const articleBlockIndexes = pickArticleIndexes(content.blocks);
+
+          if (articleBlockIndexes.length > 0) {
+            // Step 2: Seed 'checking' rows (ON CONFLICT DO NOTHING — idempotent)
+            await db
+              .insert(s.verificationResults)
+              .values(
+                articleBlockIndexes.map((i) => ({
+                  lessonId: lesson.id,
+                  blockId: `block-${i}`,
+                  status: 'checking' as const,
+                  claimsTotal: 0,
+                  claimsVerified: 0,
+                  details: [],
+                })),
+              )
+              .onConflictDoNothing();
+
+            // Step 3: Verify each article block directly (fake mode → all claims supported)
+            for (const blockIndex of articleBlockIndexes) {
+              await verifyBlock(db, { lessonId: lesson.id, blockIndex });
+            }
+
+            // Step 4: Finalize — compute score and update lesson using shared helpers
+            const verifyRows = await db
+              .select({
+                claimsVerified: s.verificationResults.claimsVerified,
+                claimsTotal: s.verificationResults.claimsTotal,
+                status: s.verificationResults.status,
+              })
+              .from(s.verificationResults)
+              .where(eq(s.verificationResults.lessonId, lesson.id));
+
+            const { score, verificationStatus: verStatus } = computeFinalize(verifyRows);
+
+            await db
+              .update(s.lessons)
+              .set({ faithfulnessScore: score, verificationStatus: verStatus })
+              .where(eq(s.lessons.id, lesson.id));
+
+            // Fire founder-alert via the shared function (greppable seam).
+            maybeAlertFaithfulness(lesson.id, score);
+
+            // Check 13: lessonVerified — faithfulnessScore >= 0.8 AND verificationStatus 'verified'
+            checks.lessonVerified = score >= 0.8 && verStatus === 'verified';
+          } else {
+            // No article blocks to verify — vacuously passes (nothing to fail)
+            checks.lessonVerified = true;
+          }
+        }
+      } catch (verifyErr) {
+        console.error(`[${c.id}] lessonVerified check exception:`, verifyErr);
+        // Check remains false
+      }
     }
   } catch (err) {
     console.error(`[${c.id}] exception:`, err);
@@ -346,6 +431,9 @@ async function main() {
 
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
   const db = drizzle(pool, { schema: s });
+
+  // Sweep orphaned eval users from prior crashed runs (prevents email collision)
+  await sweepOrphanFixtures(db);
 
   // Ensure allowlist rows exist (idempotent; dev DB already has them from seed:trust).
   await ensureAllowlist(db);

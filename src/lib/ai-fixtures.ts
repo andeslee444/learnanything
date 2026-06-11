@@ -90,6 +90,32 @@ export const fakeOutputs: Record<LlmPurpose, unknown> = {
       { term: 'variable', definition: 'A named container for a value.' },
     ],
   },
+  // Phase 6 — extract-claims: two factual claims from the fixture article block
+  // ("Variables: names for values" block in generate-lesson fixture).
+  'extract-claims': {
+    claims: [
+      { claim: 'A variable stores a value under a name.' },
+      { claim: 'Variables let the same code work with different values.' },
+    ],
+  },
+
+  // Phase 6 — entail-claim: supported with the python docs url (from dossier fixture)
+  'entail-claim': {
+    verdict: 'supported',
+    sourceUrl: 'https://docs.python.org/3/tutorial/index.html',
+    note: 'The dossier explicitly states variables store values under a name.',
+  },
+
+  // Phase 6 — regenerate-block: one article block schema output
+  // (single block, not the full lesson — matches regenerateBlockSchema in verify.ts)
+  'regenerate-block': {
+    type: 'article',
+    heading: 'Variables: names for values',
+    markdown:
+      'A **variable** stores a value under a name so your program can refer to it later. Think of it as a labeled box: `count = 3` puts the number 3 in a box called count. Variables let the same code work with different values — update the box contents and every part of the code that reads the label sees the new value.',
+    citationUrls: ['https://docs.python.org/3/tutorial/index.html'],
+  },
+
   'create-reference-doc': {
     title: 'Variables and types',
     docType: 'cheat_sheet',

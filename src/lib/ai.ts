@@ -21,7 +21,10 @@ export type LlmPurpose =
   | 'plan-lesson'
   | 'generate-lesson'
   | 'distill-records'
-  | 'create-reference-doc';
+  | 'create-reference-doc'
+  | 'extract-claims'      // Phase 6: extract factual claims from a single article block
+  | 'entail-claim'        // Phase 6: entail one claim against the dossier
+  | 'regenerate-block';   // Phase 6: regenerate ONE article block when claims fail entailment
 
 /**
  * Single entry point for structured LLM calls.

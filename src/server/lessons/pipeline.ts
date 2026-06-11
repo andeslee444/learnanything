@@ -10,6 +10,8 @@ import { lessonPlanSchema, winCheckPassed, type LessonContent } from './blocks';
 import { buildOpenerItems, hydrateTrackState, pickFrontierNode, planLesson } from './planner';
 import { generateBlocks } from './generate';
 import { validateLessonContent } from './validate';
+import { start } from 'workflow/api';
+import { verifyLessonWorkflow } from '@/workflows/verify-lesson';
 
 type Db = NodePgDatabase<typeof s>;
 
@@ -204,6 +206,20 @@ async function deliver(
   if (rows.length === 0) return { status: 'skipped' as const };
   const holdId = await findHoldId(db, lessonId);
   if (holdId) await captureHold(db, holdId).catch((err) => console.error('capture failed', err));
+  // Fire-and-forget: start the async verification workflow after capture.
+  // The lesson is already usable (status='ready') — verification happens asynchronously.
+  start(verifyLessonWorkflow, [lessonId]).catch((err: unknown) => {
+    // WorkflowRuntimeError is expected outside the WDK runtime (e.g. tests, evals).
+    // Log a single quiet line instead of a full error trace in those contexts.
+    const isWdkError =
+      err instanceof Error &&
+      (err.name === 'WorkflowRuntimeError' || err.message.includes('WorkflowRuntimeError'));
+    if (isWdkError) {
+      console.warn('[verify] workflow unavailable outside WDK runtime');
+    } else {
+      console.error('verifyLessonWorkflow start failed', err);
+    }
+  });
   return { status: 'ready' as const };
 }
 

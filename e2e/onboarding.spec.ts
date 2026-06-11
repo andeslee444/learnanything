@@ -113,6 +113,22 @@ test('signup → mission interview → learning map → calibration → lesson j
   // Fixture heading from 'generate-lesson' fixture
   await expect(page.getByText('Variables: names for values')).toBeVisible({ timeout: 10_000 });
 
+  // ── 7b. Verification badges ───────────────────────────────────
+  // The verify-lesson workflow fires fire-and-forget after lesson delivery.
+  // In fake mode it completes quickly (all claims return 'supported'),
+  // but it IS async relative to the lesson render, so we poll generously.
+  //
+  // Expectation: at least one verify-badge with data-verify-status="verified"
+  // appears on the lesson page without a page reload.
+  // Uses expect.poll to tolerate the async verification gap (up to 30s).
+  await expect.poll(
+    async () => {
+      const count = await page.locator('[data-testid="verify-badge"][data-verify-status="verified"]').count();
+      return count;
+    },
+    { timeout: 30_000, intervals: [1_000] },
+  ).toBeGreaterThanOrEqual(1);
+
   // ── 8. Body quiz: q1 ─────────────────────────────────────────
   // No opener items — this e2e learner has no glossary terms at lesson #1
   // (glossary is seeded by research extraction; the e2e uses fake mode which
