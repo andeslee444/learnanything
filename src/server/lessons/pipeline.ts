@@ -10,6 +10,8 @@ import { lessonPlanSchema, winCheckPassed, type LessonContent } from './blocks';
 import { buildOpenerItems, hydrateTrackState, pickFrontierNode, planLesson } from './planner';
 import { generateBlocks } from './generate';
 import { validateLessonContent } from './validate';
+import { start } from 'workflow/api';
+import { verifyLessonWorkflow } from '@/workflows/verify-lesson';
 
 type Db = NodePgDatabase<typeof s>;
 
@@ -204,6 +206,11 @@ async function deliver(
   if (rows.length === 0) return { status: 'skipped' as const };
   const holdId = await findHoldId(db, lessonId);
   if (holdId) await captureHold(db, holdId).catch((err) => console.error('capture failed', err));
+  // Fire-and-forget: start the async verification workflow after capture.
+  // The lesson is already usable (status='ready') — verification happens asynchronously.
+  start(verifyLessonWorkflow, [lessonId]).catch((err) =>
+    console.error('verifyLessonWorkflow start failed', err),
+  );
   return { status: 'ready' as const };
 }
 
