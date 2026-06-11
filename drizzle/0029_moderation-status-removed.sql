@@ -1,0 +1,1 @@
+ALTER TYPE "public"."moderation_status" ADD VALUE 'removed';

@@ -10,6 +10,8 @@
  *
  * Uniqueness: the unique index on shared_lessons.slug is the authoritative backstop.
  * On a collision (extremely rare) we retry once with a fresh shortid.
+ * After the retry, if still null (second consecutive collision), we throw — callers
+ * must not evaluate 'kind' in null.
  *
  * Badge snapshot shape (stored in badge_snapshot JSONB column):
  * {
@@ -18,6 +20,14 @@
  *   checkedAt: string | null,   // ISO timestamp of latest verification_result.updated_at
  *   blocks: Array<{ blockId: string; badge: 'verified' | 'unverified' }>
  * }
+ *
+ * Per-user debounce: a module-level Map prevents concurrent share POSTs from the
+ * same learner. Checked after ownership + idempotency so 404s/cached hits are not
+ * rate-limited. Window: 5 seconds. Returns { kind: 'too_fast' }.
+ *
+ * Sticky moderation: admin takedown rows (moderationStatus === 'removed') are not
+ * owner-deletable. unshareLesson returns { kind: 'removed_by_moderation' } → route 403.
+ * Admin-controlled rows are managed by T3 admin actions — not by the owner.
  */
 
 import { eq } from 'drizzle-orm';
@@ -127,13 +137,37 @@ export type ShareSuccess = {
 
 export type ShareError =
   | { kind: 'sanitize_unavailable'; retryable: true }
-  | { kind: 'cannot_share'; reason: string };
+  | { kind: 'cannot_share'; reason: string }
+  | { kind: 'too_fast' }
+  | { kind: 'removed_by_moderation' };
+
+// ── Per-user in-process debounce ──────────────────────────────────────────────
+
+/**
+ * Module-level debounce map. Key = learnerId, value = timestamp of last share call.
+ * Cleared automatically after DEBOUNCE_MS to avoid memory growth.
+ * Only consulted for new shares (after ownership + idempotency checks).
+ */
+const _shareDebounceMap = new Map<string, number>();
+const DEBOUNCE_MS = 5_000;
+
+/** Exported for testing — allows tests to clear debounce state between calls. */
+export function _clearShareDebounce(learnerId?: string): void {
+  if (learnerId) {
+    _shareDebounceMap.delete(learnerId);
+  } else {
+    _shareDebounceMap.clear();
+  }
+}
 
 // ── createShareHandlers ───────────────────────────────────────────────────────
 
 export function createShareHandlers(db: Db) {
   /**
    * Share a lesson. Idempotent: existing row → returns the same slug/URL.
+   *
+   * Ownership check is the route's responsibility (resolveOwnership).
+   * Debounce (5s per learnerId) is checked after idempotency — cache hits bypass it.
    *
    * @throws never — all errors are returned as ShareError discriminated union.
    */
@@ -147,11 +181,17 @@ export function createShareHandlers(db: Db) {
   ): Promise<ShareSuccess | ShareError> {
     // ── Idempotency: already shared ─────────────────────────────────────────
     const [existing] = await db
-      .select({ slug: s.sharedLessons.slug, vertical: s.sharedLessons.vertical })
+      .select({
+        slug: s.sharedLessons.slug,
+        vertical: s.sharedLessons.vertical,
+        moderationStatus: s.sharedLessons.moderationStatus,
+      })
       .from(s.sharedLessons)
       .where(eq(s.sharedLessons.lessonId, lesson.id));
 
     if (existing) {
+      // Return existing row regardless of moderationStatus — do NOT modify the row.
+      // Admin-controlled rows (moderationStatus 'removed') are not re-approved here.
       const vert = existing.vertical || track.vertical;
       return {
         slug: existing.slug,
@@ -160,6 +200,23 @@ export function createShareHandlers(db: Db) {
         alreadyExisted: true,
       };
     }
+
+    // ── Per-user debounce (5s) ───────────────────────────────────────────────
+    // Only for new shares (idempotency hit above bypasses this).
+    // Keyed by track.learnerId so only the same user is rate-limited.
+    const learnerId = track.learnerId;
+    const lastCall = _shareDebounceMap.get(learnerId);
+    const now = Date.now();
+    if (lastCall !== undefined && now - lastCall < DEBOUNCE_MS) {
+      return { kind: 'too_fast' };
+    }
+    _shareDebounceMap.set(learnerId, now);
+    // Auto-clean after debounce window to avoid memory growth.
+    setTimeout(() => {
+      if (_shareDebounceMap.get(learnerId) === now) {
+        _shareDebounceMap.delete(learnerId);
+      }
+    }, DEBOUNCE_MS);
 
     // ── Sanitize ─────────────────────────────────────────────────────────────
     let sanitizeResult: Awaited<ReturnType<typeof sanitizeLessonContent>>;
@@ -183,7 +240,7 @@ export function createShareHandlers(db: Db) {
     const topic = (lesson.spec as { topic?: string })?.topic ?? track.topic;
     const shortIdGen = opts?.shortIdGen ?? makeShortId;
 
-    const tryInsert = async (): Promise<ShareSuccess | ShareError> => {
+    const tryInsert = async (): Promise<ShareSuccess | null> => {
       const slug = buildSlug(topic, shortIdGen());
 
       try {
@@ -205,7 +262,7 @@ export function createShareHandlers(db: Db) {
           alreadyExisted: false,
         };
       } catch (err) {
-        // Unique constraint violation on slug → retry once.
+        // Unique constraint violation on slug → return null (sentinel for retry).
         // Drizzle wraps the PG error inside DrizzleQueryError.cause.
         // The pg driver sets code=23505 and constraint='shared_lessons_slug_unique'.
         // We check both the outer err and the cause to be robust.
@@ -221,8 +278,34 @@ export function createShareHandlers(db: Db) {
           outer.message?.toLowerCase().includes('slug') ??
           false;
         if (is23505 && hasSlugConstraint) {
-          return null as unknown as ShareSuccess; // sentinel for retry
+          return null; // sentinel for retry
         }
+
+        // Concurrent double-share: unique constraint on lesson_id (not slug).
+        // The loser of a check-then-insert race hits 23505 on shared_lessons_lesson_id_unique.
+        // Re-select the row and return it with alreadyExisted=true (idempotent 200).
+        const hasLessonConstraint =
+          pgErr.constraint?.includes('lesson_id') ??
+          outer.constraint?.includes('lesson_id') ??
+          pgErr.message?.toLowerCase().includes('lesson_id') ??
+          outer.message?.toLowerCase().includes('lesson_id') ??
+          false;
+        if (is23505 && hasLessonConstraint) {
+          const [raceRow] = await db
+            .select({ slug: s.sharedLessons.slug, vertical: s.sharedLessons.vertical })
+            .from(s.sharedLessons)
+            .where(eq(s.sharedLessons.lessonId, lesson.id));
+          if (raceRow) {
+            const vert = raceRow.vertical || track.vertical;
+            return {
+              slug: raceRow.slug,
+              url: `/learn/${vert}/${raceRow.slug}`,
+              vertical: vert,
+              alreadyExisted: true,
+            };
+          }
+        }
+
         throw err;
       }
     };
@@ -230,15 +313,42 @@ export function createShareHandlers(db: Db) {
     const first = await tryInsert();
     // If slug collision, retry once
     if (first === null) {
-      return tryInsert();
+      const second = await tryInsert();
+      if (second === null) {
+        // Two consecutive slug collisions — astronomically unlikely but guard the contract.
+        throw new Error('slug collision persisted after retry');
+      }
+      return second;
     }
     return first;
   }
 
   /**
    * Unshare a lesson. Idempotent: no row → still returns success (no-op).
+   *
+   * Admin takedown guard: if the existing row's moderationStatus === 'removed',
+   * this returns { kind: 'removed_by_moderation' } — the owner cannot delete
+   * a row that an admin has taken down. T3 admin actions manage these rows.
    */
-  async function unshareLesson(lessonId: string): Promise<void> {
+  async function unshareLesson(
+    lessonId: string,
+  ): Promise<void | { kind: 'removed_by_moderation' }> {
+    const [existing] = await db
+      .select({ moderationStatus: s.sharedLessons.moderationStatus })
+      .from(s.sharedLessons)
+      .where(eq(s.sharedLessons.lessonId, lessonId));
+
+    if (!existing) {
+      // No row → idempotent no-op.
+      return;
+    }
+
+    if (existing.moderationStatus === 'removed') {
+      // Admin-controlled row — not owner-deletable.
+      // T3 admin actions manage rows with moderationStatus 'removed'.
+      return { kind: 'removed_by_moderation' };
+    }
+
     await db.delete(s.sharedLessons).where(eq(s.sharedLessons.lessonId, lessonId));
   }
 

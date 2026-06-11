@@ -4,7 +4,7 @@ import { tracks, learners } from './learners';
 
 export const lessonStatus = pgEnum('lesson_status', ['generating', 'queued', 'ready', 'failed', 'needs_review']);
 export const verificationStatus = pgEnum('verification_status', ['pending', 'verified', 'issues']);
-export const moderationStatus = pgEnum('moderation_status', ['pending', 'approved', 'rejected']);
+export const moderationStatus = pgEnum('moderation_status', ['pending', 'approved', 'rejected', 'removed']);
 
 export const lessons = pgTable(
   'lessons',
