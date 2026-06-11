@@ -6,7 +6,7 @@
  * 2. Regenerate path: sequential mock (first entail unsupported → regenerate → second
  *    entail supported → content block replaced + status 'regenerated').
  * 3. Once-rule: already-regenerated row refuses a second call to regenerateBlock.
- * 4. Finalize score + alert seam: spy on console.warn under ALERT_THRESHOLD.
+ * 4. Finalize score + alert seam: spy on alertFounder (the seam) under ALERT_THRESHOLD.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
@@ -15,6 +15,7 @@ import { testDb, testPool, resetDb } from '@/test/db';
 import * as s from '@/db/schema';
 import { verifyBlock, regenerateBlock } from '@/server/lessons/verify';
 import { computeFinalize, maybeAlertFaithfulness } from '@/server/lessons/verdicts';
+import * as alertsModule from '@/lib/alerts';
 import { createSequentialMockLanguageModel } from '@/test/mock-llm-helper';
 
 // ── Seed helpers ──────────────────────────────────────────────────────────────
@@ -264,27 +265,26 @@ describe('finalize — faithfulness score + console.warn alert seam', () => {
     expect(updated.verificationStatus).toBe('verified');
   });
 
-  it('fires console.warn under ALERT_THRESHOLD (founder-alert seam via maybeAlertFaithfulness)', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('calls alertFounder("faithfulness") under ALERT_THRESHOLD (alert seam via maybeAlertFaithfulness)', () => {
+    const alertSpy = vi.spyOn(alertsModule, 'alertFounder').mockImplementation(() => {});
     try {
-      // Spy the real function — not an inline if-console.warn copy.
       maybeAlertFaithfulness('test-lesson', 0.6);
-      expect(warnSpy).toHaveBeenCalledWith(
-        '[founder-alert] faithfulness',
+      expect(alertSpy).toHaveBeenCalledWith(
+        'faithfulness',
         expect.objectContaining({ score: 0.6 }),
       );
     } finally {
-      warnSpy.mockRestore();
+      alertSpy.mockRestore();
     }
   });
 
-  it('does NOT fire console.warn above ALERT_THRESHOLD', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('does NOT call alertFounder above ALERT_THRESHOLD', () => {
+    const alertSpy = vi.spyOn(alertsModule, 'alertFounder').mockImplementation(() => {});
     try {
       maybeAlertFaithfulness('test-lesson', 0.9);
-      expect(warnSpy).not.toHaveBeenCalled();
+      expect(alertSpy).not.toHaveBeenCalled();
     } finally {
-      warnSpy.mockRestore();
+      alertSpy.mockRestore();
     }
   });
 
@@ -447,16 +447,16 @@ describe('regenerateBlock — sequential mock path', () => {
     expect(verificationStatus).toBe('issues');
     expect(shouldAlert).toBe(true);
 
-    // Spy on the real maybeAlertFaithfulness path (not an inline console.warn copy).
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Spy alertFounder (the seam) — maybeAlertFaithfulness delegates to it.
+    const alertSpy = vi.spyOn(alertsModule, 'alertFounder').mockImplementation(() => {});
     try {
       maybeAlertFaithfulness(lesson.id, score);
-      expect(warnSpy).toHaveBeenCalledWith(
-        '[founder-alert] faithfulness',
+      expect(alertSpy).toHaveBeenCalledWith(
+        'faithfulness',
         expect.objectContaining({ lessonId: lesson.id, score }),
       );
     } finally {
-      warnSpy.mockRestore();
+      alertSpy.mockRestore();
     }
   });
 });

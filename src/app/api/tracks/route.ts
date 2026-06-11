@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { db } from '@/lib/db';
 import * as s from '@/db/schema';
+import type { AgeBand } from '@/lib/age-band';
 import { getLearnerByUserId } from '@/server/learners';
 import { moderateText } from '@/server/moderation';
 import { createTrackInput, createTrackWithMission } from '@/server/tracks';
@@ -39,7 +40,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'track_limit' }, { status: 403 });
   }
 
-  const moderation = await moderateText(`${parsed.data.topic}\n${parsed.data.whyText}`, 'learning_request');
+  const moderation = await moderateText(`${parsed.data.topic}\n${parsed.data.whyText}`, 'learning_request', {
+    ageBand: learner.ageBand as AgeBand,
+  });
   if (!moderation.allowed) {
     const status = moderation.errored ? 503 : 422;
     return NextResponse.json({ error: 'moderation', retryable: !!moderation.errored }, { status });
