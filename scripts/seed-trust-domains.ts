@@ -26,6 +26,18 @@ const SEEDS: Array<{ vertical: string | null; domain: string; tier: 'tier1' | 't
   ...[
     'worldhistory.org', 'smithsonianmag.com', 'historytoday.com', 'historyextra.com', 'jstor.org',
   ].map((domain) => ({ vertical: 'history', domain, tier: 'tier2' as const, note: 'reputable editorial' })),
+  // ── math: tier 1 ──
+  ...[
+    'khanacademy.org', 'mathworld.wolfram.com', 'artofproblemsolving.com', 'nctm.org', 'maa.org',
+    'mathigon.org', 'brilliant.org', 'desmos.com', 'mathisfun.com', 'openstax.org',
+    'ams.org', 'plus.maths.org', '3blue1brown.com', 'purplemath.com', 'cuemath.com',
+  ].map((domain) => ({ vertical: 'math', domain, tier: 'tier1' as const, note: 'recognized math education resource' })),
+  // ── science: tier 1 ──
+  ...[
+    'nasa.gov', 'noaa.gov', 'nature.com', 'scientificamerican.com', 'nih.gov',
+    'science.org', 'nationalgeographic.com', 'exploratorium.edu', 'sciencedaily.com', 'britannica.com',
+    'hhmi.org', 'acs.org', 'aps.org', 'physics.org', 'chemguide.co.uk',
+  ].map((domain) => ({ vertical: 'science', domain, tier: 'tier1' as const, note: 'recognized science institution/publication' })),
   // ── global blocklist (vertical = null) ──
   ...[
     'pinterest.com', 'quora.com', 'answers.com', 'coursehero.com', 'scribd.com',
