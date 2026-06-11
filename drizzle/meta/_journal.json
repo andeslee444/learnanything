@@ -197,6 +197,13 @@
       "when": 1781164213885,
       "tag": "0027_parent-user-set-null",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1781167503925,
+      "tag": "0028_shared-lessons-share-fields",
+      "breakpoints": true
     }
   ]
 }
