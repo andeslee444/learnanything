@@ -291,30 +291,8 @@ describe('Goal 1 — narration round-trip: script built, fake-mode WAV valid, PO
     });
   });
 
-  // ── 1d. Route-level wiring (smoke) ────────────────────────────────────────
-  //
-  // Verify the POST and GET exports from the narration route exist and are functions.
-  // The auth layer (Next.js headers() + auth.api.getSession) cannot be bypassed in
-  // unit context, so we verify the route exports exist and that the DB layer
-  // (tested above) backs them correctly. Full HTTP tests run in the e2e battery.
-
-  it('goal-1: POST and GET are exported from the narration route', async () => {
-    const route = await import('@/app/api/lessons/[lessonId]/narration/route');
-    expect(typeof route.POST).toBe('function');
-    expect(typeof route.GET).toBe('function');
-  });
-
-  it('goal-1: ListenButton testids are present in the source (listen-button, lesson-audio, narration-transcript)', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const src = fs.readFileSync(
-      path.resolve(process.cwd(), 'src/components/lesson/listen-button.tsx'),
-      'utf8',
-    );
-    expect(src).toContain('data-testid="listen-button"');
-    expect(src).toContain('data-testid="lesson-audio"');
-    expect(src).toContain('data-testid="narration-transcript"');
-  });
+  // UI wiring (listen-button → lesson-audio + narration-transcript) is proven
+  // by e2e/phase-8.spec.ts in the same battery — no source-grepping here.
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -507,18 +485,8 @@ describe('Goal 2 — upload round-trip: extraction stored, raw text gone, planne
     }
   });
 
-  // ── 2e. UI testids (wiring check) ─────────────────────────────────────────
-
-  it('goal-2: UploadContext component has upload-context and upload-item testids in source', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const src = fs.readFileSync(
-      path.resolve(process.cwd(), 'src/app/(app)/tracks/[id]/upload-context.tsx'),
-      'utf8',
-    );
-    expect(src).toContain('data-testid="upload-context"');
-    expect(src).toContain('data-testid="upload-item"');
-  });
+  // UI wiring (upload-context file input → upload-item) is proven by
+  // e2e/phase-8.spec.ts in the same battery — no source-grepping here.
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -903,30 +871,6 @@ describe('Goal 3 — email seam: log transport w/o key; 401 fail-closed; digest 
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// e2e coverage note (Phase 8)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-describe('e2e coverage note — Phase 8 UI goals', () => {
-  it('goal-4 e2e: phase-8.spec.ts exists at e2e/phase-8.spec.ts (wired into battery)', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    expect(fs.existsSync(path.resolve(process.cwd(), 'e2e/phase-8.spec.ts'))).toBe(true);
-  });
-
-  it('goal-4 e2e: phase-8.spec.ts asserts listen-button → lesson-audio + narration-transcript', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const src = fs.readFileSync(path.resolve(process.cwd(), 'e2e/phase-8.spec.ts'), 'utf8');
-    expect(src).toContain('listen-button');
-    expect(src).toContain('lesson-audio');
-    expect(src).toContain('narration-transcript');
-  });
-
-  it('goal-4 e2e: phase-8.spec.ts asserts upload-item appears after file upload', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const src = fs.readFileSync(path.resolve(process.cwd(), 'e2e/phase-8.spec.ts'), 'utf8');
-    expect(src).toContain('upload-item');
-  });
-});
+// The Phase 8 UI goals (listen-button → lesson-audio + narration-transcript;
+// upload → upload-item) are covered by e2e/phase-8.spec.ts, which runs in the
+// same CI battery via `npm run test:e2e`.
