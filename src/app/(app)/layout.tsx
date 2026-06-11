@@ -6,6 +6,7 @@ import { db } from '@/lib/db';
 import { getLearnerByUserId } from '@/server/learners';
 import { getDueCount } from '@/lib/reviews';
 import { SignOutButton } from '@/components/signout-button';
+import { SessionNudge } from '@/components/session-nudge';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -20,7 +21,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <div className="min-h-screen bg-cloud">
       <header className="flex items-center justify-between border-b border-ink-400/20 px-6 py-4">
         <Link href="/tracks" className="text-lg font-medium text-sky-700">LearnAnything</Link>
-        <div className="flex items-center gap-4">
+        <nav aria-label="Site navigation" className="flex items-center gap-4">
           {dueCount > 0 && (
             <Link
               href="/reviews"
@@ -33,9 +34,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             </Link>
           )}
           <SignOutButton />
-        </div>
+        </nav>
       </header>
       {children}
+      <SessionNudge />
     </div>
   );
 }

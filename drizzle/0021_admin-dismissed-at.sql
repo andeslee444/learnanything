@@ -1,0 +1,1 @@
+ALTER TABLE "lessons" ADD COLUMN "admin_dismissed_at" timestamp with time zone;

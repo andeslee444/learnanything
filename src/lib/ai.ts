@@ -24,7 +24,8 @@ export type LlmPurpose =
   | 'create-reference-doc'
   | 'extract-claims'      // Phase 6: extract factual claims from a single article block
   | 'entail-claim'        // Phase 6: entail one claim against the dossier
-  | 'regenerate-block';   // Phase 6: regenerate ONE article block when claims fail entailment
+  | 'regenerate-block'    // Phase 6: regenerate ONE article block when claims fail entailment
+  | 'tutor';              // Phase 7: tutor panel reply with hard pedagogy guardrails
 
 /**
  * Single entry point for structured LLM calls.

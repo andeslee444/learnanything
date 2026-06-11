@@ -251,8 +251,8 @@ export function ReviewSession({ initialItems }: Props) {
         className="sr-only"
       />
 
-      {/* Progress indicator */}
-      <p className="text-xs text-sky-500 font-medium uppercase tracking-wide">
+      {/* Progress indicator — sky-700 (#175aa0) on cloud/white: 7.5:1 — passes WCAG AA. */}
+      <p className="text-xs text-sky-700 font-medium uppercase tracking-wide">
         {currentIndex + 1} / {items.length}
       </p>
 

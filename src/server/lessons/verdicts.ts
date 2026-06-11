@@ -4,6 +4,8 @@
  * both inline and in tests.
  */
 
+import { alertFounder } from '@/lib/alerts';
+
 /** Score below this threshold triggers a founder-alert console.warn. */
 export const ALERT_THRESHOLD = 0.8;
 
@@ -66,11 +68,12 @@ export function computeFinalize(
 }
 
 /**
- * Fire the founder-alert console.warn if score < ALERT_THRESHOLD.
- * Exported as a tiny named function so tests can spy the real path.
+ * Fire the founder-alert if score < ALERT_THRESHOLD.
+ * Delegates to alertFounder (the single seam) so tests can spy alertFounder.
+ * Pure logic (threshold check) kept here — call sites and existing tests unchanged.
  */
 export function maybeAlertFaithfulness(lessonId: string, score: number): void {
   if (score < ALERT_THRESHOLD) {
-    console.warn('[founder-alert] faithfulness', { lessonId, score });
+    alertFounder('faithfulness', { lessonId, score });
   }
 }

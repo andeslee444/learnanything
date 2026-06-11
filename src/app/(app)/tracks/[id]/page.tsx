@@ -166,7 +166,7 @@ export default async function TrackDetailPage({ params }: { params: Promise<{ id
                     <span
                       key={node.id}
                       data-testid="map-node"
-                      className="rounded-full bg-sun-100 px-3 py-1 text-sm text-sun-700"
+                      className="rounded-full bg-sun-100 px-3 py-1 text-sm font-semibold text-sun-700"
                       aria-label={`Skill: ${node.name}`}
                     >
                       {node.name}

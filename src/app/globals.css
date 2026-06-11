@@ -18,7 +18,8 @@
   --color-sun-100: #fff3d6;
   --color-sun-300: #ffd98a;
   --color-sun-500: #f5b53f;
-  --color-sun-700: #b97f14;
+  /* sun-700 darkened from #b97f14 → #8c5e0a for WCAG AA (4.97:1 on sun-100) — see P7 a11y fix. */
+  --color-sun-700: #8c5e0a;
 
   /* Neutral ink on warm white */
   --color-cloud: #fdfdfc;

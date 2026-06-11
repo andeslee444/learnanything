@@ -12,6 +12,7 @@ import { FlashcardDeck } from '@/components/lesson/flashcard-deck';
 import { WorkedExample } from '@/components/lesson/worked-example';
 import { AnimatedDiagram } from '@/components/lesson/animated-diagram';
 import { WinCheck } from '@/components/lesson/win-check';
+import { TutorPanel } from '@/components/lesson/tutor-panel';
 
 type LessonContent = {
   openerItems: QuizItem[];
@@ -272,6 +273,9 @@ function LessonReady({ lessonId, trackId, data }: LessonReadyProps) {
           liveRef={liveRef}
         />
       )}
+
+      {/* Tutor panel — collapsible, shown under lesson blocks when ready */}
+      <TutorPanel lessonId={lessonId} />
     </article>
   );
 }

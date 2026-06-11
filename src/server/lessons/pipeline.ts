@@ -2,6 +2,7 @@ import { and, desc, eq, lt, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as s from '@/db/schema';
 import { MODEL_TIERS } from '@/lib/ai';
+import type { AgeBand } from '@/lib/age-band';
 import { captureHold, refundHold } from '@/lib/credits';
 import { moderateText } from '@/server/moderation';
 import { researchTopic } from '@/server/research/research-topic';
@@ -97,10 +98,17 @@ export async function stagePlan(db: Db, lessonId: string) {
 export async function stageResearch(db: Db, lessonId: string) {
   const [lesson] = await db.select().from(s.lessons).where(eq(s.lessons.id, lessonId));
   if (!lesson || lesson.status !== 'generating') return { status: 'skipped' as const };
-  const [track] = await db.select().from(s.tracks).where(eq(s.tracks.id, lesson.trackId));
+  // Join learner to get ageBand for age-banded moderation.
+  const [trackRow] = await db
+    .select({ track: s.tracks, ageBand: s.learners.ageBand })
+    .from(s.tracks)
+    .innerJoin(s.learners, eq(s.tracks.learnerId, s.learners.id))
+    .where(eq(s.tracks.id, lesson.trackId));
+  if (!trackRow) return failLesson(db, lessonId, 'track or learner missing');
+  const { track, ageBand } = trackRow;
   const snapshot = lesson.zpdSnapshot as { nodeName?: string };
   const topic = `${track.topic}: ${snapshot.nodeName ?? track.topic}`;
-  const result = await researchTopic(db, { vertical: track.vertical, topic, levelBand: track.expertiseBand });
+  const result = await researchTopic(db, { vertical: track.vertical, topic, levelBand: track.expertiseBand }, { ageBand: ageBand as AgeBand });
   if (result.status === 'insufficient_sources') {
     return failLesson(db, lessonId, 'not enough trustworthy sources for this topic yet');
   }
@@ -169,9 +177,9 @@ export async function stageGenerate(db: Db, lessonId: string) {
     const retry = await generateBlocks(plan, dossierInput, levelBand, correction);
     const recheck = validateLessonContent({ ...validatorInput, content: retry });
     if (!recheck.ok) return failLesson(db, lessonId, `lesson failed validation: ${recheck.errors.join('; ')}`);
-    return deliver(db, lessonId, retry, dossier.sources, trackState);
+    return deliver(db, lessonId, retry, dossier.sources, trackState, ageBand as AgeBand);
   }
-  return deliver(db, lessonId, generated, dossier.sources, trackState);
+  return deliver(db, lessonId, generated, dossier.sources, trackState, ageBand as AgeBand);
 }
 
 async function deliver(
@@ -180,11 +188,12 @@ async function deliver(
   content: Omit<LessonContent, 'openerItems'>,
   sources: Array<{ url: string }>,
   trackState?: Awaited<ReturnType<typeof hydrateTrackState>>,
+  ageBand?: AgeBand,
 ) {
   const [lesson] = await db.select().from(s.lessons).where(eq(s.lessons.id, lessonId));
   const state = trackState ?? (await hydrateTrackState(db, lesson.trackId));
   const openerItems = buildOpenerItems(state?.glossary ?? []);
-  const moderation = await moderateText(JSON.stringify(content), 'assembled_lesson');
+  const moderation = await moderateText(JSON.stringify(content), 'assembled_lesson', { ageBand });
   if (!moderation.allowed) {
     return failLesson(
       db,
@@ -205,7 +214,16 @@ async function deliver(
     .returning({ id: s.lessons.id });
   if (rows.length === 0) return { status: 'skipped' as const };
   const holdId = await findHoldId(db, lessonId);
-  if (holdId) await captureHold(db, holdId).catch((err) => console.error('capture failed', err));
+  if (holdId) await captureHold(db, holdId).catch((err: unknown) => {
+    // Admin retries reuse the old refunded hold (findHoldId finds the most-recent hold entry).
+    // captureHold on an already-settled/refunded hold throws "already settled" — this is
+    // expected and not an error. Log debug to avoid noisy false-positive alerts in CI/prod.
+    if (err instanceof Error && err.message.includes('already settled')) {
+      console.debug('[capture] hold already settled — admin retry, skipping capture');
+      return;
+    }
+    console.error('capture failed', err);
+  });
   // Fire-and-forget: start the async verification workflow after capture.
   // The lesson is already usable (status='ready') — verification happens asynchronously.
   start(verifyLessonWorkflow, [lessonId]).catch((err: unknown) => {

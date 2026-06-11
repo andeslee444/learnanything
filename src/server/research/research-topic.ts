@@ -2,6 +2,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as s from '@/db/schema';
 import { MODEL_TIERS } from '@/lib/ai';
 import { moderateText } from '@/server/moderation';
+import type { AgeBand } from '@/lib/age-band';
 import { findDossier, saveDossier, type DossierKey } from './dossier-cache';
 import { extractSource } from './extract';
 import { getResearchProvider, type ResearchProvider, type SearchSource } from './provider';
@@ -22,13 +23,18 @@ export type ResearchResult =
 /**
  * Spec §2 step 2: cache → allowlist search → (if <3 vetted) open web + blocklist → re-vet →
  * still <3 → insufficient (never parametric-only) → quarantined extraction → synthesis → persist.
+ *
+ * @param ageBand — optional learner age band threaded to all moderateText calls.
+ *   NOTE: levelBand (expertise) and ageBand (age) are distinct — levelBand is for pedagogy,
+ *   ageBand is for safety policy. The smoke script defaults conservative (no band → '13_15').
  */
 export async function researchTopic(
   db: Db,
   key: DossierKey,
-  deps: { provider?: ResearchProvider } = {}
+  deps: { provider?: ResearchProvider; ageBand?: AgeBand } = {}
 ): Promise<ResearchResult> {
-  const moderation = await moderateText(key.topic, 'learning_request');
+  const { ageBand } = deps;
+  const moderation = await moderateText(key.topic, 'learning_request', { ageBand });
   if (!moderation.allowed) return { status: 'blocked', retryable: !!moderation.errored };
 
   const cached = await findDossier(db, key);
@@ -69,7 +75,8 @@ export async function researchTopic(
     const extraction = await extractSource(source, key.topic);
     const contentCheck = await moderateText(
       JSON.stringify({ claims: extraction.claims, glossarySeeds: extraction.glossarySeeds, misconceptions: extraction.misconceptions }),
-      'retrieved_content'
+      'retrieved_content',
+      { ageBand },
     );
     if (contentCheck.errored) anyContentCheckErrored = true;
     if (contentCheck.allowed) extractions.push(extraction);

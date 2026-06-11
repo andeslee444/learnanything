@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { badgeFor, faithfulnessScore, ALERT_THRESHOLD, pickArticleIndexes, computeFinalize, maybeAlertFaithfulness } from './verdicts';
+import * as alertsModule from '@/lib/alerts';
 
 // ── badgeFor ──────────────────────────────────────────────────────────────────
 
@@ -119,29 +120,30 @@ describe('computeFinalize', () => {
 });
 
 // ── maybeAlertFaithfulness ────────────────────────────────────────────────────
+// Tests spy on alertFounder (the new seam) — maybeAlertFaithfulness delegates to it.
 
 describe('maybeAlertFaithfulness', () => {
-  it('fires console.warn under ALERT_THRESHOLD', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('calls alertFounder with kind=faithfulness under ALERT_THRESHOLD', () => {
+    const alertSpy = vi.spyOn(alertsModule, 'alertFounder').mockImplementation(() => {});
     try {
       maybeAlertFaithfulness('lesson-abc', 0.6);
-      expect(warnSpy).toHaveBeenCalledWith(
-        '[founder-alert] faithfulness',
+      expect(alertSpy).toHaveBeenCalledWith(
+        'faithfulness',
         expect.objectContaining({ lessonId: 'lesson-abc', score: 0.6 }),
       );
     } finally {
-      warnSpy.mockRestore();
+      alertSpy.mockRestore();
     }
   });
 
-  it('does NOT fire console.warn at or above ALERT_THRESHOLD', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('does NOT call alertFounder at or above ALERT_THRESHOLD', () => {
+    const alertSpy = vi.spyOn(alertsModule, 'alertFounder').mockImplementation(() => {});
     try {
       maybeAlertFaithfulness('lesson-xyz', 0.8);
       maybeAlertFaithfulness('lesson-xyz', 0.9);
-      expect(warnSpy).not.toHaveBeenCalled();
+      expect(alertSpy).not.toHaveBeenCalled();
     } finally {
-      warnSpy.mockRestore();
+      alertSpy.mockRestore();
     }
   });
 });

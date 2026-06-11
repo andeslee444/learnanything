@@ -196,7 +196,8 @@ export function WinCheck({ lessonId, items, objective, trackId, liveRef }: Props
       className="mt-8 rounded-xl border border-sun-300 bg-sun-100 px-6 py-6"
       aria-label="Win check — demonstrate what you learned"
     >
-      <p className="text-xs font-medium uppercase tracking-wide text-sun-700">Win check</p>
+      {/* sun-700 (#8c5e0a) on sun-100 (#fff3d6): 4.97:1 — passes WCAG AA for all text sizes. */}
+      <p className="text-sm font-semibold uppercase tracking-wide text-sun-700">Win check</p>
       <p className="mt-1 text-sm text-ink-600">
         Answer all questions correctly to complete this lesson.
       </p>

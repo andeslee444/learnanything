@@ -29,7 +29,7 @@
 
 **Files:** `src/app/(app)/admin/page.tsx` (+ actions route `src/app/api/admin/queue/route.ts`), env ADMIN_EMAILS, tests
 
-- Gate: `ADMIN_EMAILS` env (comma-separated); the session user's email must be in it → else 404 (don't reveal). Add to .env.example (+ founder's email locally in .env/.env.local: andes.leelee@gmail.com).
+- Gate: `ADMIN_EMAILS` env (comma-separated); the session user's email must be in it → else 404 (don't reveal). Add to .env.example (+ founder's email locally in .env/.env.local: <founder-email>).
 - Queue query: lessons where (status='failed' AND content.failureReason LIKE '%safety%') OR (verificationStatus='issues') OR (faithfulnessScore < 0.8) — joined to track topic + learner display name; newest 50.
 - GET /api/admin/queue returns the list; POST {lessonId, action: 'retry'|'dismiss'} — retry: reuse the retry route's CAS logic (failed→generating + hold? Admin retry should NOT charge the learner: place NO hold, add a `grant` of 0? Simplest honest: admin retry calls the same flip + start WITHOUT placeHold and records a ledger 'grant' amount 0 with note? Ledger CHECK requires grant >0 — skip ledger entirely; comment: admin retries are house-paid, no hold→capture cycle, findHoldId returns the old refunded hold — captureHold on it would throw 'already settled' and is caught — verify deliver's capture path tolerates this: it catches; OK). dismiss: verificationStatus='issues' lessons → set needs_review? Keep simple: dismiss writes a row to... no table for this. Add `adminDismissedAt` timestamp column to lessons (migration) — dismissed items leave the queue.
 - /admin page: table (testid `admin-queue-row`), retry/dismiss buttons, faithfulness + reason columns. Plain, founder-only.
