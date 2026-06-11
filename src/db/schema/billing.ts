@@ -14,7 +14,7 @@ export const creditLedger = pgTable(
     amount: integer('amount').notNull(), // grant +N, hold -1, refund +1, capture 0
     relatedEntryId: uuid('related_entry_id').references((): AnyPgColumn => creditLedger.id), // capture/refund → the hold they settle
     lessonId: uuid('lesson_id'), // soft reference; lessons may be deleted independently
-    stripeRef: text('stripe_ref'), // idempotency key for Stripe webhook events (event.id)
+    stripeRef: text('stripe_ref'), // idempotency key for subscription grants: Stripe invoice.id (NOT event.id — ensures cross-event dedup)
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

@@ -1,5 +1,5 @@
 /**
- * Billing tests — Phase 9 Task 1.
+ * Billing tests — Phase 9 Task 1 (post-double-grant redesign).
  *
  * Tests (all exercise real code paths — no tautologies):
  *
@@ -7,22 +7,44 @@
  * 2. grantSubscriptionCredits idempotency: same stripeRef twice → ONE ledger row
  *    via DB read, second call returns granted:false.
  * 3. balance() reflects the subscription grant.
+ *
  * 4. handleStripeEvent checkout.session.completed: upserts billing_customers,
- *    inserts ledger row, returns 200.
- * 5. handleStripeEvent invoice.paid: resolves user via stripeCustomerId, grants
- *    renewal credits, returns 200.
- * 6. handleStripeEvent invoice.paid with unknown customer: returns 200, no ledger row.
- * 7. handleStripeEvent customer.subscription.deleted: sets status 'canceled', no ledger row.
- * 8. handleStripeEvent unknown event type: returns 200 {received:true}.
+ *    returns 200 — NO credit grant (credits come exclusively from invoice.paid).
+ * 5. handleStripeEvent invoice.paid (subscription_create): resolves user via
+ *    stripeCustomerId, grants credits, returns 200.
+ * 5b. handleStripeEvent invoice.paid (subscription_cycle): grants renewal credits.
+ * 6. handleStripeEvent invoice.paid with unknown customer → 200, no ledger row.
+ * 6b. handleStripeEvent invoice.paid billing_reason 'manual' → 200, no grant.
+ * 7. handleStripeEvent customer.subscription.deleted → sets status 'canceled', no ledger row.
+ * 8. handleStripeEvent unknown event type → returns 200 {received:true}.
+ *
  * 9. Signature verification through the ACTUAL POST route:
- *    - valid signature → 200 + ledger effect
+ *    - valid signature → 200 + ledger effect (via invoice.paid with billing_reason)
  *    - bad signature → 400
- * 10. No STRIPE_SECRET_KEY → webhook POST returns 503, checkout POST returns 503.
- * 11. No STRIPE_WEBHOOK_SECRET → webhook POST returns 503.
- * 12. import('@/lib/stripe') succeeds with no keys (module doesn't throw on load).
+ *
+ * 10. 503 paths (no STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET):
+ *     10a. webhook POST → 503
+ *     10b. checkout: verify via getStripe() seam (route 401s before 503 without auth)
+ *     10c. checkout createCheckoutHandler: 503 with no key (via getStripe seam)
+ *     10d. checkout createCheckoutHandler: 503 with key but no STRIPE_PRICE_ID
+ * 11. webhook POST returns 503 when STRIPE_SECRET_KEY set but STRIPE_WEBHOOK_SECRET absent.
+ * 12. import stripe module succeeds with no keys (module doesn't throw on load).
+ *
+ * 13. First-payment pair — checkout.session.completed then invoice.paid →
+ *     balance exactly SUBSCRIPTION_MONTHLY_CREDITS, status 'active'.
+ * 14. First-payment pair reversed — invoice.paid then checkout.session.completed →
+ *     balance exactly SUBSCRIPTION_MONTHLY_CREDITS, status 'active'.
+ * 15. Same invoice.id in two different event envelopes → ONE ledger row.
+ * 16. checkout.session.completed with unknown userId → 200, no billing_customers row,
+ *     alertFounder spied (content-free payload).
+ * 17. customer_mismatch: existing row with customer A, checkout.session.completed
+ *     arrives with customer B → stripeCustomerId stays A, alertFounder spied.
+ * 18. createCheckoutHandler — 409 when subscriptionStatus 'active'.
+ * 19. createCheckoutHandler — customer REUSE: sessions.create receives customer: existingId,
+ *     customers.create NOT called.
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 import { eq, count } from 'drizzle-orm';
 import Stripe from 'stripe';
 import { NextRequest } from 'next/server';
@@ -72,7 +94,12 @@ function makeCheckoutEvent(userId: string, customerId: string, eventId: string):
   } as Stripe.Event;
 }
 
-function makeInvoicePaidEvent(customerId: string, eventId: string): Stripe.Event {
+function makeInvoicePaidEvent(
+  customerId: string,
+  eventId: string,
+  invoiceId?: string,
+  billingReason: string = 'subscription_create'
+): Stripe.Event {
   return {
     id: eventId,
     object: 'event',
@@ -84,9 +111,10 @@ function makeInvoicePaidEvent(customerId: string, eventId: string): Stripe.Event
     request: null,
     data: {
       object: {
-        id: 'in_test_' + eventId,
+        id: invoiceId ?? ('in_test_' + eventId),
         object: 'invoice',
         customer: customerId,
+        billing_reason: billingReason,
       } as unknown as Stripe.Invoice,
     },
   } as Stripe.Event;
@@ -118,7 +146,7 @@ describe('grantSubscriptionCredits', () => {
   it('1. first call inserts ledger row, returns granted:true', async () => {
     const u = await seedUser('grant-1');
     const { grantSubscriptionCredits } = await import('@/lib/credits');
-    const stripeRef = 'evt_test_' + crypto.randomUUID();
+    const stripeRef = 'in_test_' + crypto.randomUUID();
 
     const result = await grantSubscriptionCredits(testDb, u.id, stripeRef);
     expect(result.granted).toBe(true);
@@ -136,7 +164,7 @@ describe('grantSubscriptionCredits', () => {
   it('2. idempotency: same stripeRef twice → ONE ledger row, second returns granted:false', async () => {
     const u = await seedUser('grant-idem');
     const { grantSubscriptionCredits } = await import('@/lib/credits');
-    const stripeRef = 'evt_idem_' + crypto.randomUUID();
+    const stripeRef = 'in_idem_' + crypto.randomUUID();
 
     const first = await grantSubscriptionCredits(testDb, u.id, stripeRef);
     expect(first.granted).toBe(true);
@@ -160,7 +188,7 @@ describe('grantSubscriptionCredits', () => {
     const before = await balance(testDb, u.id);
     expect(before).toBe(0);
 
-    await grantSubscriptionCredits(testDb, u.id, 'evt_bal_' + crypto.randomUUID());
+    await grantSubscriptionCredits(testDb, u.id, 'in_bal_' + crypto.randomUUID());
 
     const after = await balance(testDb, u.id);
     expect(after).toBe(SUBSCRIPTION_MONTHLY_CREDITS);
@@ -170,7 +198,7 @@ describe('grantSubscriptionCredits', () => {
 // ── 4-8. handleStripeEvent all event shapes ────────────────────────────────────
 
 describe('handleStripeEvent', () => {
-  it('4. checkout.session.completed → upserts billing_customers, grants credits, returns 200', async () => {
+  it('4. checkout.session.completed → upserts billing_customers, returns 200 (NO credit grant)', async () => {
     const u = await seedUser('hse-checkout');
     const customerId = 'cus_test_' + crypto.randomUUID().replace(/-/g, '');
     const eventId = 'evt_checkout_' + crypto.randomUUID().replace(/-/g, '');
@@ -190,21 +218,19 @@ describe('handleStripeEvent', () => {
     expect(bc.stripeCustomerId).toBe(customerId);
     expect(bc.subscriptionStatus).toBe('active');
 
-    // Credit ledger row created.
+    // NO credit ledger row from checkout event — grants come from invoice.paid.
     const ledgerRows = await testDb
       .select()
       .from(s.creditLedger)
       .where(eq(s.creditLedger.userId, u.id));
-    expect(ledgerRows).toHaveLength(1);
-    expect(ledgerRows[0].entryType).toBe('purchase');
-    expect(ledgerRows[0].stripeRef).toBe(eventId);
+    expect(ledgerRows).toHaveLength(0);
   });
 
-  it('5. invoice.paid → resolves user via stripeCustomerId, grants renewal credits, returns 200', async () => {
+  it('5. invoice.paid (subscription_create) → grants credits, returns 200', async () => {
     const u = await seedUser('hse-invoice');
     const customerId = 'cus_invoice_' + crypto.randomUUID().replace(/-/g, '');
 
-    // Pre-seed billing_customers row (normally created by checkout.session.completed).
+    // Pre-seed billing_customers row (normally created upfront by checkout route).
     await testDb.insert(s.billingCustomers).values({
       userId: u.id,
       stripeCustomerId: customerId,
@@ -212,21 +238,48 @@ describe('handleStripeEvent', () => {
     });
 
     const eventId = 'evt_invoice_' + crypto.randomUUID().replace(/-/g, '');
+    const invoiceId = 'in_test_' + crypto.randomUUID().replace(/-/g, '');
     const { handleStripeEvent } = await import('@/app/api/billing/webhook/route');
-    const event = makeInvoicePaidEvent(customerId, eventId);
+    const event = makeInvoicePaidEvent(customerId, eventId, invoiceId, 'subscription_create');
 
     const result = await handleStripeEvent(testDb, event);
     expect(result.status).toBe(200);
 
-    // Credit row for the user from this event.
+    // Credit row for the user keyed on invoice.id (not event.id).
     const rows = await testDb
       .select()
       .from(s.creditLedger)
       .where(eq(s.creditLedger.userId, u.id));
     expect(rows.length).toBeGreaterThanOrEqual(1);
-    const grantRow = rows.find((r) => r.stripeRef === eventId);
+    const grantRow = rows.find((r) => r.stripeRef === invoiceId);
     expect(grantRow).toBeDefined();
     expect(grantRow!.entryType).toBe('purchase');
+  });
+
+  it('5b. invoice.paid (subscription_cycle) → grants renewal credits, returns 200', async () => {
+    const u = await seedUser('hse-cycle');
+    const customerId = 'cus_cycle_' + crypto.randomUUID().replace(/-/g, '');
+
+    await testDb.insert(s.billingCustomers).values({
+      userId: u.id,
+      stripeCustomerId: customerId,
+      subscriptionStatus: 'active',
+    });
+
+    const eventId = 'evt_cycle_' + crypto.randomUUID().replace(/-/g, '');
+    const invoiceId = 'in_cycle_' + crypto.randomUUID().replace(/-/g, '');
+    const { handleStripeEvent } = await import('@/app/api/billing/webhook/route');
+    const event = makeInvoicePaidEvent(customerId, eventId, invoiceId, 'subscription_cycle');
+
+    const result = await handleStripeEvent(testDb, event);
+    expect(result.status).toBe(200);
+
+    const grantRow = await testDb
+      .select()
+      .from(s.creditLedger)
+      .where(eq(s.creditLedger.stripeRef, invoiceId));
+    expect(grantRow).toHaveLength(1);
+    expect(grantRow[0].entryType).toBe('purchase');
   });
 
   it('6. invoice.paid with unknown customer → returns 200, no new ledger rows', async () => {
@@ -239,7 +292,7 @@ describe('handleStripeEvent', () => {
       .from(s.creditLedger);
 
     const { handleStripeEvent } = await import('@/app/api/billing/webhook/route');
-    const event = makeInvoicePaidEvent(unknownCustomerId, eventId);
+    const event = makeInvoicePaidEvent(unknownCustomerId, eventId, undefined, 'subscription_create');
     const result = await handleStripeEvent(testDb, event);
     expect(result.status).toBe(200);
 
@@ -247,6 +300,34 @@ describe('handleStripeEvent', () => {
     const [{ value: after }] = await testDb
       .select({ value: count() })
       .from(s.creditLedger);
+    expect(after).toBe(before);
+  });
+
+  it('6b. invoice.paid with billing_reason "manual" → returns 200, no grant', async () => {
+    const u = await seedUser('hse-manual');
+    const customerId = 'cus_manual_' + crypto.randomUUID().replace(/-/g, '');
+
+    await testDb.insert(s.billingCustomers).values({
+      userId: u.id,
+      stripeCustomerId: customerId,
+      subscriptionStatus: 'active',
+    });
+
+    const [{ value: before }] = await testDb
+      .select({ value: count() })
+      .from(s.creditLedger)
+      .where(eq(s.creditLedger.userId, u.id));
+
+    const eventId = 'evt_manual_' + crypto.randomUUID().replace(/-/g, '');
+    const { handleStripeEvent } = await import('@/app/api/billing/webhook/route');
+    const event = makeInvoicePaidEvent(customerId, eventId, undefined, 'manual');
+    const result = await handleStripeEvent(testDb, event);
+    expect(result.status).toBe(200);
+
+    const [{ value: after }] = await testDb
+      .select({ value: count() })
+      .from(s.creditLedger)
+      .where(eq(s.creditLedger.userId, u.id));
     expect(after).toBe(before);
   });
 
@@ -344,12 +425,20 @@ describe('POST /api/billing/webhook — signature verification', () => {
     _resetStripeForTests();
   });
 
-  it('9a. valid signature → 200 + ledger effect', async () => {
+  it('9a. valid signature + invoice.paid → 200 + ledger effect', async () => {
     const u = await seedUser('sig-valid');
     const customerId = 'cus_sig_' + crypto.randomUUID().replace(/-/g, '');
     const eventId = 'evt_sig_' + crypto.randomUUID().replace(/-/g, '');
+    const invoiceId = 'in_sig_' + crypto.randomUUID().replace(/-/g, '');
 
-    const event = makeCheckoutEvent(u.id, customerId, eventId);
+    // Pre-seed billing_customers so the webhook can resolve the userId.
+    await testDb.insert(s.billingCustomers).values({
+      userId: u.id,
+      stripeCustomerId: customerId,
+      subscriptionStatus: 'none',
+    });
+
+    const event = makeInvoicePaidEvent(customerId, eventId, invoiceId, 'subscription_create');
     const payload = JSON.stringify(event);
     const sig = stripeForTests.webhooks.generateTestHeaderString({
       payload,
@@ -369,16 +458,16 @@ describe('POST /api/billing/webhook — signature verification', () => {
     const res = await POST(req);
     expect(res.status).toBe(200);
 
-    // Ledger effect: a purchase row for this user.
+    // Ledger effect: a purchase row keyed on invoice.id.
     const rows = await testDb
       .select()
       .from(s.creditLedger)
-      .where(eq(s.creditLedger.stripeRef, eventId));
+      .where(eq(s.creditLedger.stripeRef, invoiceId));
     expect(rows).toHaveLength(1);
   });
 
   it('9b. bad signature → 400', async () => {
-    const payload = JSON.stringify({ id: 'evt_badsig', type: 'checkout.session.completed' });
+    const payload = JSON.stringify({ id: 'evt_badsig', type: 'invoice.paid' });
     const { createPostHandler } = await import('@/app/api/billing/webhook/route');
     const POST = createPostHandler(testDb);
     const req = new NextRequest('http://localhost/api/billing/webhook', {
@@ -399,6 +488,7 @@ describe('POST /api/billing/webhook — signature verification', () => {
 describe('503 when STRIPE_SECRET_KEY absent', () => {
   let origSecretKey: string | undefined;
   let origWebhookSecret: string | undefined;
+  let origPriceId: string | undefined;
 
   // Preserve and clear keys, reset singleton after each test.
   afterEach(async () => {
@@ -411,6 +501,11 @@ describe('503 when STRIPE_SECRET_KEY absent', () => {
       process.env.STRIPE_WEBHOOK_SECRET = origWebhookSecret;
     } else {
       delete process.env.STRIPE_WEBHOOK_SECRET;
+    }
+    if (origPriceId !== undefined) {
+      process.env.STRIPE_PRICE_ID = origPriceId;
+    } else {
+      delete process.env.STRIPE_PRICE_ID;
     }
     const { _resetStripeForTests } = await import('@/lib/stripe');
     _resetStripeForTests();
@@ -433,17 +528,75 @@ describe('503 when STRIPE_SECRET_KEY absent', () => {
     expect(res.status).toBe(503);
   });
 
-  it('10b. checkout POST returns 503 when no STRIPE_SECRET_KEY', async () => {
+  it('10b. checkout returns 503 when no STRIPE_SECRET_KEY (via getStripe seam)', async () => {
     origSecretKey = process.env.STRIPE_SECRET_KEY;
     delete process.env.STRIPE_SECRET_KEY;
-    // Set a fake price id so we reach the stripe-null check.
-    process.env.STRIPE_PRICE_ID = 'price_fake';
 
-    // Auth check will fire first — we need to bypass it.
-    // The route returns 401 before 503 when unauthenticated.
-    // So we verify via the getStripe() seam directly.
+    // The route returns 401 before 503 when unauthenticated, so we verify via
+    // the getStripe() seam directly — confirms the 503 branch is reachable.
     const { getStripe } = await import('@/lib/stripe');
     expect(getStripe()).toBeNull();
+  });
+
+  it('10c. createCheckoutHandler POST returns 503 when getStripe() is null', async () => {
+    origSecretKey = process.env.STRIPE_SECRET_KEY;
+    origPriceId = process.env.STRIPE_PRICE_ID;
+    delete process.env.STRIPE_SECRET_KEY;
+    process.env.STRIPE_PRICE_ID = 'price_fake';
+
+    // Mock auth.api.getSession to return a fake session so the 401 doesn't fire.
+    vi.resetModules();
+    vi.doMock('@/lib/auth', () => ({
+      auth: {
+        api: {
+          getSession: vi.fn().mockResolvedValue({
+            user: { id: 'user_test_503', email: 'test@test.com' },
+          }),
+        },
+      },
+    }));
+    // Also mock next/headers so the route doesn't blow up without real Next.js context.
+    vi.doMock('next/headers', () => ({
+      headers: vi.fn().mockResolvedValue(new Headers()),
+    }));
+
+    const { createCheckoutHandler } = await import('@/app/api/billing/checkout/route');
+    const POST = createCheckoutHandler(testDb);
+    const res = await POST();
+    expect(res.status).toBe(503);
+
+    vi.resetModules();
+  });
+
+  it('10d. createCheckoutHandler POST returns 503 when STRIPE_PRICE_ID absent', async () => {
+    origSecretKey = process.env.STRIPE_SECRET_KEY;
+    origPriceId = process.env.STRIPE_PRICE_ID;
+    process.env.STRIPE_SECRET_KEY = 'sk_test_fake_for_503';
+    delete process.env.STRIPE_PRICE_ID;
+
+    const { _resetStripeForTests } = await import('@/lib/stripe');
+    _resetStripeForTests();
+
+    vi.resetModules();
+    vi.doMock('@/lib/auth', () => ({
+      auth: {
+        api: {
+          getSession: vi.fn().mockResolvedValue({
+            user: { id: 'user_test_503b', email: 'test2@test.com' },
+          }),
+        },
+      },
+    }));
+    vi.doMock('next/headers', () => ({
+      headers: vi.fn().mockResolvedValue(new Headers()),
+    }));
+
+    const { createCheckoutHandler } = await import('@/app/api/billing/checkout/route');
+    const POST = createCheckoutHandler(testDb);
+    const res = await POST();
+    expect(res.status).toBe(503);
+
+    vi.resetModules();
   });
 
   it('11. webhook POST returns 503 when STRIPE_SECRET_KEY set but STRIPE_WEBHOOK_SECRET absent', async () => {
@@ -473,5 +626,306 @@ describe('503 when STRIPE_SECRET_KEY absent', () => {
     const { getStripe } = await import('@/lib/stripe');
     // Returns null, not throws.
     expect(getStripe()).toBeNull();
+  });
+});
+
+// ── 13-17. First-payment pair dedup, ordering, and alertFounder paths ─────────
+
+describe('first-payment pair dedup and ordering', () => {
+  it('13. checkout.session.completed then invoice.paid → balance = SUBSCRIPTION_MONTHLY_CREDITS, status active', async () => {
+    const u = await seedUser('pair-order1');
+    const customerId = 'cus_pair1_' + crypto.randomUUID().replace(/-/g, '');
+    const invoiceId = 'in_pair1_' + crypto.randomUUID().replace(/-/g, '');
+
+    const { handleStripeEvent } = await import('@/app/api/billing/webhook/route');
+    const { balance } = await import('@/lib/credits');
+    const { SUBSCRIPTION_MONTHLY_CREDITS } = await import('@/lib/stripe');
+
+    // 1. checkout.session.completed
+    const checkoutEvent = makeCheckoutEvent(u.id, customerId, 'evt_co_' + crypto.randomUUID());
+    await handleStripeEvent(testDb, checkoutEvent);
+
+    // 2. invoice.paid (subscription_create)
+    const invoiceEvent = makeInvoicePaidEvent(
+      customerId,
+      'evt_inv_' + crypto.randomUUID().replace(/-/g, ''),
+      invoiceId,
+      'subscription_create'
+    );
+    await handleStripeEvent(testDb, invoiceEvent);
+
+    const bal = await balance(testDb, u.id);
+    expect(bal).toBe(SUBSCRIPTION_MONTHLY_CREDITS);
+
+    const [bc] = await testDb
+      .select()
+      .from(s.billingCustomers)
+      .where(eq(s.billingCustomers.userId, u.id));
+    expect(bc.subscriptionStatus).toBe('active');
+  });
+
+  it('14. invoice.paid first then checkout.session.completed → balance = SUBSCRIPTION_MONTHLY_CREDITS, status active', async () => {
+    const u = await seedUser('pair-order2');
+    const customerId = 'cus_pair2_' + crypto.randomUUID().replace(/-/g, '');
+    const invoiceId = 'in_pair2_' + crypto.randomUUID().replace(/-/g, '');
+
+    // Seed the billing_customers row upfront (as checkout route would do) so
+    // invoice.paid can resolve userId even without prior checkout event.
+    await testDb.insert(s.billingCustomers).values({
+      userId: u.id,
+      stripeCustomerId: customerId,
+      subscriptionStatus: 'none',
+    });
+
+    const { handleStripeEvent } = await import('@/app/api/billing/webhook/route');
+    const { balance } = await import('@/lib/credits');
+    const { SUBSCRIPTION_MONTHLY_CREDITS } = await import('@/lib/stripe');
+
+    // 1. invoice.paid arrives first
+    const invoiceEvent = makeInvoicePaidEvent(
+      customerId,
+      'evt_inv2_' + crypto.randomUUID().replace(/-/g, ''),
+      invoiceId,
+      'subscription_create'
+    );
+    await handleStripeEvent(testDb, invoiceEvent);
+
+    // 2. checkout.session.completed arrives late
+    const checkoutEvent = makeCheckoutEvent(u.id, customerId, 'evt_co2_' + crypto.randomUUID());
+    await handleStripeEvent(testDb, checkoutEvent);
+
+    const bal = await balance(testDb, u.id);
+    expect(bal).toBe(SUBSCRIPTION_MONTHLY_CREDITS);
+
+    const [bc] = await testDb
+      .select()
+      .from(s.billingCustomers)
+      .where(eq(s.billingCustomers.userId, u.id));
+    expect(bc.subscriptionStatus).toBe('active');
+  });
+
+  it('15. same invoice.id in two different event envelopes → ONE ledger row', async () => {
+    const u = await seedUser('dedup-invoice');
+    const customerId = 'cus_dedup_' + crypto.randomUUID().replace(/-/g, '');
+    const invoiceId = 'in_dedup_' + crypto.randomUUID().replace(/-/g, '');
+
+    await testDb.insert(s.billingCustomers).values({
+      userId: u.id,
+      stripeCustomerId: customerId,
+      subscriptionStatus: 'active',
+    });
+
+    const { handleStripeEvent } = await import('@/app/api/billing/webhook/route');
+
+    // Two different event.ids wrapping the same invoice.id.
+    const event1 = makeInvoicePaidEvent(
+      customerId,
+      'evt_dedup1_' + crypto.randomUUID().replace(/-/g, ''),
+      invoiceId,
+      'subscription_create'
+    );
+    const event2 = makeInvoicePaidEvent(
+      customerId,
+      'evt_dedup2_' + crypto.randomUUID().replace(/-/g, ''),
+      invoiceId,
+      'subscription_create'
+    );
+
+    await handleStripeEvent(testDb, event1);
+    await handleStripeEvent(testDb, event2); // duplicate — must be no-op
+
+    const rows = await testDb
+      .select()
+      .from(s.creditLedger)
+      .where(eq(s.creditLedger.stripeRef, invoiceId));
+    expect(rows).toHaveLength(1); // exactly one, not two
+  });
+
+  it('16. checkout.session.completed with unknown userId → 200, no billing_customers row, alertFounder spied', async () => {
+    const unknownUserId = 'user_nonexistent_' + crypto.randomUUID().replace(/-/g, '');
+    const customerId = 'cus_nouser_' + crypto.randomUUID().replace(/-/g, '');
+    const eventId = 'evt_nouser_' + crypto.randomUUID().replace(/-/g, '');
+
+    const alertCalls: Array<{ kind: string; payload: Record<string, unknown> }> = [];
+    const alertsModule = await import('@/lib/alerts');
+    const spy = vi.spyOn(alertsModule, 'alertFounder').mockImplementation(
+      (kind: string, payload: Record<string, unknown>) => {
+        alertCalls.push({ kind, payload });
+      }
+    );
+
+    try {
+      const { handleStripeEvent } = await import('@/app/api/billing/webhook/route');
+      const event = makeCheckoutEvent(unknownUserId, customerId, eventId);
+      const result = await handleStripeEvent(testDb, event);
+      expect(result.status).toBe(200);
+
+      // No billing_customers row created for the unknown user.
+      const rows = await testDb
+        .select()
+        .from(s.billingCustomers)
+        .where(eq(s.billingCustomers.stripeCustomerId, customerId));
+      expect(rows).toHaveLength(0);
+
+      // alertFounder was called (content-free — just note, no PII).
+      expect(alertCalls.length).toBeGreaterThanOrEqual(1);
+      const billingAlert = alertCalls.find((c) => c.kind === 'billing');
+      expect(billingAlert).toBeDefined();
+      // Payload must be content-free: no user data beyond the note key.
+      expect(billingAlert!.payload).toHaveProperty('note', 'unknown_user');
+      expect(billingAlert!.payload).not.toHaveProperty('userId');
+      expect(billingAlert!.payload).not.toHaveProperty('email');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('17. customer_mismatch: existing row with customer A, checkout event with customer B → stripeCustomerId stays A, alertFounder spied', async () => {
+    const u = await seedUser('mismatch');
+    const customerA = 'cus_A_' + crypto.randomUUID().replace(/-/g, '');
+    const customerB = 'cus_B_' + crypto.randomUUID().replace(/-/g, '');
+    const eventId = 'evt_mismatch_' + crypto.randomUUID().replace(/-/g, '');
+
+    // Seed with customer A.
+    await testDb.insert(s.billingCustomers).values({
+      userId: u.id,
+      stripeCustomerId: customerA,
+      subscriptionStatus: 'active',
+    });
+
+    const alertCalls: Array<{ kind: string; payload: Record<string, unknown> }> = [];
+    const alertsModule = await import('@/lib/alerts');
+    const spy = vi.spyOn(alertsModule, 'alertFounder').mockImplementation(
+      (kind: string, payload: Record<string, unknown>) => {
+        alertCalls.push({ kind, payload });
+      }
+    );
+
+    try {
+      const { handleStripeEvent } = await import('@/app/api/billing/webhook/route');
+      // Checkout event arrives with customer B.
+      const event = makeCheckoutEvent(u.id, customerB, eventId);
+      const result = await handleStripeEvent(testDb, event);
+      expect(result.status).toBe(200);
+
+      // stripeCustomerId must still be customer A — not overwritten.
+      const [bc] = await testDb
+        .select()
+        .from(s.billingCustomers)
+        .where(eq(s.billingCustomers.userId, u.id));
+      expect(bc.stripeCustomerId).toBe(customerA);
+
+      // alertFounder was called with note 'customer_mismatch'.
+      const mismatchAlert = alertCalls.find(
+        (c) => c.kind === 'billing' && c.payload.note === 'customer_mismatch'
+      );
+      expect(mismatchAlert).toBeDefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+// ── 18-19. createCheckoutHandler functional paths ─────────────────────────────
+
+describe('createCheckoutHandler — functional paths', () => {
+  it('18. returns 409 when subscriptionStatus is active', async () => {
+    const u = await seedUser('checkout-409');
+    const customerId = 'cus_409_' + crypto.randomUUID().replace(/-/g, '');
+
+    await testDb.insert(s.billingCustomers).values({
+      userId: u.id,
+      stripeCustomerId: customerId,
+      subscriptionStatus: 'active',
+    });
+
+    vi.resetModules();
+    vi.doMock('@/lib/auth', () => ({
+      auth: {
+        api: {
+          getSession: vi.fn().mockResolvedValue({
+            user: { id: u.id, email: u.email },
+          }),
+        },
+      },
+    }));
+    vi.doMock('next/headers', () => ({
+      headers: vi.fn().mockResolvedValue(new Headers()),
+    }));
+    // Provide a fake key so stripe check passes, and a fake price id.
+    process.env.STRIPE_SECRET_KEY = 'sk_test_409';
+    process.env.STRIPE_PRICE_ID = 'price_fake';
+    const { _resetStripeForTests } = await import('@/lib/stripe');
+    _resetStripeForTests();
+
+    const { createCheckoutHandler } = await import('@/app/api/billing/checkout/route');
+    const POST = createCheckoutHandler(testDb);
+    const res = await POST();
+    expect(res.status).toBe(409);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('already_subscribed');
+
+    vi.resetModules();
+    delete process.env.STRIPE_SECRET_KEY;
+    delete process.env.STRIPE_PRICE_ID;
+    const { _resetStripeForTests: r } = await import('@/lib/stripe');
+    r();
+  });
+
+  it('19. customer REUSE: customers.create NOT called when stripeCustomerId exists; sessions.create receives existing id', async () => {
+    const u = await seedUser('checkout-reuse');
+    const existingCustomerId = 'cus_existing_' + crypto.randomUUID().replace(/-/g, '');
+
+    // Seed with an existing customer id but NOT active status (e.g., canceled — can re-subscribe).
+    await testDb.insert(s.billingCustomers).values({
+      userId: u.id,
+      stripeCustomerId: existingCustomerId,
+      subscriptionStatus: 'canceled',
+    });
+
+    process.env.STRIPE_SECRET_KEY = 'sk_test_reuse';
+    process.env.STRIPE_PRICE_ID = 'price_reuse_fake';
+
+    const fakeSessionsCreate = vi.fn().mockResolvedValue({ url: 'https://checkout.stripe.com/test' });
+    const fakeCustomersCreate = vi.fn().mockResolvedValue({ id: 'cus_should_not_be_created' });
+
+    vi.resetModules();
+    vi.doMock('@/lib/auth', () => ({
+      auth: {
+        api: {
+          getSession: vi.fn().mockResolvedValue({
+            user: { id: u.id, email: u.email },
+          }),
+        },
+      },
+    }));
+    vi.doMock('next/headers', () => ({
+      headers: vi.fn().mockResolvedValue(new Headers()),
+    }));
+    vi.doMock('@/lib/stripe', () => ({
+      getStripe: () => ({
+        customers: { create: fakeCustomersCreate },
+        checkout: { sessions: { create: fakeSessionsCreate } },
+      }),
+      SUBSCRIPTION_MONTHLY_CREDITS: 30,
+      _resetStripeForTests: vi.fn(),
+    }));
+
+    const { createCheckoutHandler } = await import('@/app/api/billing/checkout/route');
+    const POST = createCheckoutHandler(testDb);
+    const res = await POST();
+    expect(res.status).toBe(200);
+
+    // customers.create must NOT have been called.
+    expect(fakeCustomersCreate).not.toHaveBeenCalled();
+
+    // sessions.create must have received the existing customer id.
+    expect(fakeSessionsCreate).toHaveBeenCalledTimes(1);
+    const callArgs = fakeSessionsCreate.mock.calls[0][0] as { customer: string };
+    expect(callArgs.customer).toBe(existingCustomerId);
+
+    vi.resetModules();
+    delete process.env.STRIPE_SECRET_KEY;
+    delete process.env.STRIPE_PRICE_ID;
   });
 });
