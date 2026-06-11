@@ -7,7 +7,7 @@
  *   correct → Rating.Good (3)
  *   incorrect → Rating.Again (1)
  */
-import { and, eq, lte } from 'drizzle-orm';
+import { and, asc, eq, lte, ne } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { createEmptyCard, fsrs, Rating } from 'ts-fsrs';
 import type { Card, ReviewLog } from 'ts-fsrs';
@@ -126,6 +126,28 @@ export interface DueCardRow {
 }
 
 /**
+ * Cheap count of due cards for the header badge.
+ * Uses the review_cards_learner_due index (learnerId, due).
+ */
+export async function getDueCount(
+  db: Db,
+  learnerId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  const { count } = await import('drizzle-orm');
+  const [row] = await db
+    .select({ value: count() })
+    .from(s.reviewCards)
+    .where(
+      and(
+        eq(s.reviewCards.learnerId, learnerId),
+        lte(s.reviewCards.due, now),
+      ),
+    );
+  return Number(row?.value ?? 0);
+}
+
+/**
  * Returns cards with due ≤ now, joined to their glossary term,
  * ordered by due ASC (most overdue first), limited to `limit`.
  */
@@ -212,6 +234,43 @@ export function buildReviewItem(
     options: shuffledOptions,
     correctIndex,
   };
+}
+
+/**
+ * Shared helper used by both the GET /due route and the POST /[cardId] grade route.
+ *
+ * Fetches distractors deterministically (the learner's other glossary definitions,
+ * ordered by term ASC, take first 3) and builds the MC item with `buildReviewItem`.
+ *
+ * Determinism: same card id → same distractor set → same shuffled option order.
+ * The POST route recomputes this identically from the card id so no correctIndex
+ * needs to travel to the client.
+ */
+export async function assembleReviewItem(
+  db: Db,
+  card: DueCardRow,
+): Promise<ReviewItem> {
+  // Distractors: the learner's other glossary definitions across all their tracks,
+  // ordered by term ASC (deterministic), excluding this card's own term.
+  // Same-track terms naturally appear first because the join is consistent.
+  const distractorRows = await db
+    .select({
+      definition: s.glossaryTerms.definition,
+      term: s.glossaryTerms.term,
+    })
+    .from(s.glossaryTerms)
+    .innerJoin(s.reviewCards, eq(s.reviewCards.glossaryTermId, s.glossaryTerms.id))
+    .where(
+      and(
+        eq(s.reviewCards.learnerId, card.learnerId),
+        ne(s.reviewCards.id, card.id), // exclude the card being reviewed
+      ),
+    )
+    .orderBy(asc(s.glossaryTerms.term))
+    .limit(3);
+
+  const distractorDefinitions = distractorRows.map((r) => r.definition);
+  return buildReviewItem(card, distractorDefinitions);
 }
 
 export interface GradeReviewOpts {
