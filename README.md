@@ -3,7 +3,7 @@
 AI-generated learning platform: any student types what they want to learn and receives custom multi-modal lessons grounded in fresh, cited web research — built on a mission-driven methodology with a persistent learner model.
 
 - Design spec: `docs/superpowers/specs/2026-06-09-learnanything-v1-design.md`
-- Current phase: 8 (TTS narration, text uploads, notifications) — see `docs/superpowers/plans/2026-06-11-phase-8-modality-ingestion.md`
+- Current phase: 9 (Stripe billing, legal pages, export/delete, 36-case evals) — see `docs/superpowers/plans/2026-06-11-phase-9-monetization-launch.md`
 
 ## Founder follow-ups (deploy checklist)
 
@@ -15,8 +15,15 @@ Everything below degrades gracefully when unset — tests and CI never need thes
 | `RESEND_API_KEY` | Real email delivery via Resend | `[email:log]` console transport |
 | `NOTIFY_FROM` | Custom From address | `LearnAnything <onboarding@resend.dev>` |
 | `CRON_SECRET` | Cron endpoints (review digest, mission report) | Endpoints 401 (fail closed) |
+| `STRIPE_SECRET_KEY` | Live Stripe billing | Billing page shows "not configured" |
+| `STRIPE_WEBHOOK_SECRET` | Webhook signature verification | Webhook 503 (fail closed) |
+| `STRIPE_PRICE_ID` | The $15/mo subscription price | Checkout 503 |
+| `APP_URL` | Checkout/portal redirect URLs | `http://localhost:3000` |
+| `CONTACT_EMAIL` | Contact address on /privacy + /terms | Generic fallback text |
 
-Set `CRON_SECRET` in Vercel env — `vercel.json` schedules the two cron routes; Vercel sends it as the bearer token automatically. Phase 9 launch-checklist note: signup currently has no email-verification flow, so digests go to unverified addresses — add verification before scaling sends (sender-reputation risk).
+Stripe setup (one-time, in the Stripe dashboard): create a recurring $15/mo Price and put its id in `STRIPE_PRICE_ID`; add a webhook endpoint pointing at `/api/billing/webhook` subscribed to `checkout.session.completed`, `invoice.paid`, `customer.subscription.deleted`, and copy its signing secret into `STRIPE_WEBHOOK_SECRET`. Subscription grants 30 credits/month (`SUBSCRIPTION_MONTHLY_CREDITS` in `src/lib/stripe.ts` — retune freely).
+
+Other launch items: **/privacy and /terms are templates pending legal review — have counsel review before public launch.** Set `CRON_SECRET` in Vercel env — `vercel.json` schedules the two cron routes. Signup has no email-verification flow, so digests go to unverified addresses — add verification before scaling sends (sender-reputation risk).
 
 ## Setup
 
