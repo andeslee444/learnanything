@@ -17,7 +17,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import * as s from '@/db/schema';
 import { verifyBlock } from '@/server/lessons/verify';
-import { pickArticleIndexes, computeFinalize, maybeAlertFaithfulness } from '@/server/lessons/verdicts';
+import { pickArticleIndexes, computeFinalize, maybeAlertFaithfulness, maybeUnpublishSharedOnRegression } from '@/server/lessons/verdicts';
 
 // ── seed step ─────────────────────────────────────────────────────────────────
 
@@ -101,6 +101,13 @@ async function finalize(lessonId: string): Promise<void> {
 
   // Founder-alert seam: greppable console.warn fires under 0.8 threshold.
   maybeAlertFaithfulness(lessonId, score);
+
+  // Faithfulness-regression auto-unpublish: if a shared_lessons row exists for
+  // this lesson with moderationStatus 'approved' and the score is now low
+  // (or status is 'issues'), flip it to 'pending' and alert the founder.
+  // This is UNLIKE anonymous reports (which are alert-only) — the trigger is
+  // internal/trusted (our own verifier), so the auto-flip is safe here.
+  await maybeUnpublishSharedOnRegression(db, lessonId, score, verificationStatus);
 }
 
 // ── workflow ──────────────────────────────────────────────────────────────────

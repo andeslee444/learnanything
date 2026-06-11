@@ -1,0 +1,1 @@
+ALTER TABLE "shared_lessons" ADD COLUMN IF NOT EXISTS "report_count" integer DEFAULT 0 NOT NULL;

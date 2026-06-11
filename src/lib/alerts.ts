@@ -12,7 +12,7 @@
 
 import { sendEmail } from './email';
 
-export type AlertKind = 'faithfulness' | 'moderation_flag' | 'crisis' | 'billing';
+export type AlertKind = 'faithfulness' | 'moderation_flag' | 'crisis' | 'billing' | 'report';
 
 /**
  * Fire a structured founder alert.

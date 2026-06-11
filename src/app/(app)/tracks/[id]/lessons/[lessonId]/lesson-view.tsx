@@ -14,6 +14,7 @@ import { AnimatedDiagram } from '@/components/lesson/animated-diagram';
 import { WinCheck } from '@/components/lesson/win-check';
 import { TutorPanel } from '@/components/lesson/tutor-panel';
 import { ListenButton } from '@/components/lesson/listen-button';
+import { ShareButton } from '@/components/lesson/share-button';
 
 type LessonContent = {
   openerItems: QuizItem[];
@@ -207,6 +208,9 @@ function LessonReady({ lessonId, trackId, data }: LessonReadyProps) {
 
       {/* Listen button — TTS narration (Phase 8) */}
       <ListenButton lessonId={lessonId} />
+
+      {/* Share button — public sharing (Phase 10 T2) */}
+      <ShareButton lessonId={lessonId} />
 
       {/* Opener: quick recall from glossary */}
       {openerItems.length > 0 && !openerComplete && (
