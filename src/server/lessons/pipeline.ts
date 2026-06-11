@@ -13,6 +13,7 @@ import { generateBlocks } from './generate';
 import { validateLessonContent } from './validate';
 import { start } from 'workflow/api';
 import { verifyLessonWorkflow } from '@/workflows/verify-lesson';
+import { sendEmail } from '@/lib/email';
 
 type Db = NodePgDatabase<typeof s>;
 
@@ -182,6 +183,42 @@ export async function stageGenerate(db: Db, lessonId: string) {
   return deliver(db, lessonId, generated, dossier.sources, trackState, ageBand as AgeBand);
 }
 
+/**
+ * Send a lesson-ready email to the learner who owns the lesson.
+ * Exported for testability.
+ *
+ * Content discipline: subject contains objective (≤80 chars), text contains
+ * only the lesson path (/tracks/{trackId}/lessons/{lessonId}) — no lesson body.
+ * Caller is responsible for fire-and-forget + error suppression.
+ */
+export async function sendLessonReadyEmail(db: Db, lessonId: string): Promise<void> {
+  // Join lesson → track → learner → user to get the learner's email.
+  const [row] = await db
+    .select({
+      userEmail: s.user.email,
+      trackId: s.tracks.id,
+      objective: s.lessons.spec,
+    })
+    .from(s.lessons)
+    .innerJoin(s.tracks, eq(s.lessons.trackId, s.tracks.id))
+    .innerJoin(s.learners, eq(s.tracks.learnerId, s.learners.id))
+    .innerJoin(s.user, eq(s.learners.userId, s.user.id))
+    .where(eq(s.lessons.id, lessonId));
+  if (!row) return;
+  // Extract objective from spec — truncate to 80 chars.
+  const specObj = row.objective as { objective?: string };
+  const rawObjective = typeof specObj?.objective === 'string' ? specObj.objective : '';
+  const objective = rawObjective.slice(0, 80);
+  const subject = objective ? `Your lesson is ready: ${objective}` : 'Your lesson is ready';
+  const lessonPath = `/tracks/${row.trackId}/lessons/${lessonId}`;
+  await sendEmail({
+    to: row.userEmail,
+    subject,
+    // Text contains only the lesson path — no lesson content (content discipline).
+    text: `Your lesson is ready. Open it here: ${lessonPath}`,
+  });
+}
+
 async function deliver(
   db: Db,
   lessonId: string,
@@ -213,6 +250,11 @@ async function deliver(
     .where(and(eq(s.lessons.id, lessonId), eq(s.lessons.status, 'generating')))
     .returning({ id: s.lessons.id });
   if (rows.length === 0) return { status: 'skipped' as const };
+
+  // Fire-and-forget lesson-ready email to the learner.
+  // A failed email must never fail delivery.
+  sendLessonReadyEmail(db, lessonId).catch(() => {});
+
   const holdId = await findHoldId(db, lessonId);
   if (holdId) await captureHold(db, holdId).catch((err: unknown) => {
     // Admin retries reuse the old refunded hold (findHoldId finds the most-recent hold entry).
