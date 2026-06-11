@@ -33,6 +33,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               {dueCount} due
             </Link>
           )}
+          <Link
+            href="/billing"
+            data-testid="nav-billing"
+            className="text-sm text-ink-600 hover:text-sky-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+          >
+            Billing
+          </Link>
           <SignOutButton />
         </nav>
       </header>
