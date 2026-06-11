@@ -79,8 +79,11 @@ export function createCheckoutHandler(database: Db) {
 
       // INSERT with onConflictDoUpdate: if a row already exists (race), only
       // overwrite stripeCustomerId when it was previously null — never clobber
-      // an existing customer id.
-      await database
+      // an existing customer id. CRITICAL: the checkout session must be created
+      // on the WINNING row's customer id, not the locally-minted one — otherwise
+      // a concurrent-checkout loser pays on a customer the webhook can't resolve
+      // and receives zero credits for the life of the subscription.
+      const [winner] = await database
         .insert(s.billingCustomers)
         .values({
           userId,
@@ -94,7 +97,9 @@ export function createCheckoutHandler(database: Db) {
             stripeCustomerId: sql`CASE WHEN ${s.billingCustomers.stripeCustomerId} IS NULL THEN EXCLUDED.stripe_customer_id ELSE ${s.billingCustomers.stripeCustomerId} END`,
             updatedAt: new Date(),
           },
-        });
+        })
+        .returning({ stripeCustomerId: s.billingCustomers.stripeCustomerId });
+      stripeCustomerId = winner.stripeCustomerId;
     }
 
     const checkoutSession = await stripe.checkout.sessions.create({

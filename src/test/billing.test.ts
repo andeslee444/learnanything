@@ -929,3 +929,124 @@ describe('createCheckoutHandler — functional paths', () => {
     delete process.env.STRIPE_PRICE_ID;
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Adversarial-review regressions (H1: concurrent-checkout race; H2: status
+// resurrection via redelivered invoice.paid)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('adversarial regressions', () => {
+  it('H1: checkout session is created on the upsert WINNER customer id, not the locally-minted loser', async () => {
+    const u = await seedUser('race-winner');
+    const winnerId = 'cus_winner_' + crypto.randomUUID().replace(/-/g, '');
+    const loserId = 'cus_loser_' + crypto.randomUUID().replace(/-/g, '');
+
+    process.env.STRIPE_SECRET_KEY = 'sk_test_race';
+    process.env.STRIPE_PRICE_ID = 'price_race_fake';
+
+    const fakeSessionsCreate = vi.fn().mockResolvedValue({ url: 'https://checkout.stripe.com/race' });
+    // Simulate the concurrent winner: by the time OUR customers.create returns
+    // (loser), the other request has already landed its row (winner) in the DB.
+    const fakeCustomersCreate = vi.fn().mockImplementation(async () => {
+      await testDb.insert(s.billingCustomers).values({
+        userId: u.id,
+        stripeCustomerId: winnerId,
+        subscriptionStatus: 'none',
+      });
+      return { id: loserId };
+    });
+
+    vi.resetModules();
+    vi.doMock('@/lib/auth', () => ({
+      auth: { api: { getSession: vi.fn().mockResolvedValue({ user: { id: u.id, email: u.email } }) } },
+    }));
+    vi.doMock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers()) }));
+    vi.doMock('@/lib/stripe', () => ({
+      getStripe: () => ({
+        customers: { create: fakeCustomersCreate },
+        checkout: { sessions: { create: fakeSessionsCreate } },
+      }),
+      SUBSCRIPTION_MONTHLY_CREDITS: 30,
+      _resetStripeForTests: vi.fn(),
+    }));
+
+    try {
+      const { createCheckoutHandler } = await import('@/app/api/billing/checkout/route');
+      const POST = createCheckoutHandler(testDb);
+      const res = await POST();
+      expect(res.status).toBe(200);
+
+      // The session MUST be created on the winner's customer id — otherwise the
+      // user pays on a customer the webhook can't resolve → zero credits forever.
+      expect(fakeSessionsCreate).toHaveBeenCalledTimes(1);
+      const callArgs = fakeSessionsCreate.mock.calls[0][0] as { customer: string };
+      expect(callArgs.customer).toBe(winnerId);
+
+      // DB still holds the winner.
+      const [row] = await testDb
+        .select({ id: s.billingCustomers.stripeCustomerId })
+        .from(s.billingCustomers)
+        .where(eq(s.billingCustomers.userId, u.id));
+      expect(row.id).toBe(winnerId);
+    } finally {
+      vi.resetModules();
+      delete process.env.STRIPE_SECRET_KEY;
+      delete process.env.STRIPE_PRICE_ID;
+    }
+  });
+
+  it('H2: redelivered already-granted invoice.paid does NOT resurrect a canceled subscription; a fresh invoice does', async () => {
+    const u = await seedUser('h2-resurrect');
+    const customerId = 'cus_h2_' + crypto.randomUUID().replace(/-/g, '');
+    const invoiceId = 'in_h2_' + crypto.randomUUID().replace(/-/g, '');
+
+    await testDb.insert(s.billingCustomers).values({
+      userId: u.id,
+      stripeCustomerId: customerId,
+      subscriptionStatus: 'active',
+    });
+
+    const { handleStripeEvent } = await import('@/app/api/billing/webhook/route');
+
+    // Original grant lands.
+    await handleStripeEvent(
+      testDb,
+      makeInvoicePaidEvent(customerId, 'evt_h2_a_' + crypto.randomUUID().replace(/-/g, ''), invoiceId, 'subscription_cycle'),
+    );
+
+    // User cancels.
+    await testDb
+      .update(s.billingCustomers)
+      .set({ subscriptionStatus: 'canceled' })
+      .where(eq(s.billingCustomers.userId, u.id));
+
+    // Stripe redelivers the SAME invoice in a new event envelope (granted=false).
+    const result = await handleStripeEvent(
+      testDb,
+      makeInvoicePaidEvent(customerId, 'evt_h2_b_' + crypto.randomUUID().replace(/-/g, ''), invoiceId, 'subscription_cycle'),
+    );
+    expect(result.status).toBe(200);
+
+    const [afterRedelivery] = await testDb
+      .select({ status: s.billingCustomers.subscriptionStatus })
+      .from(s.billingCustomers)
+      .where(eq(s.billingCustomers.userId, u.id));
+    expect(afterRedelivery.status).toBe('canceled'); // NOT resurrected
+
+    // A genuinely fresh invoice (resubscribe) flips back to active.
+    await handleStripeEvent(
+      testDb,
+      makeInvoicePaidEvent(
+        customerId,
+        'evt_h2_c_' + crypto.randomUUID().replace(/-/g, ''),
+        'in_h2_fresh_' + crypto.randomUUID().replace(/-/g, ''),
+        'subscription_create',
+      ),
+    );
+    const [afterFresh] = await testDb
+      .select({ status: s.billingCustomers.subscriptionStatus })
+      .from(s.billingCustomers)
+      .where(eq(s.billingCustomers.userId, u.id));
+    expect(afterFresh.status).toBe('active');
+  });
+});

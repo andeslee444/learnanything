@@ -111,8 +111,9 @@ export const refundHold = (db: Db, holdId: string) => settleHold(db, holdId, 're
  * Grant SUBSCRIPTION_MONTHLY_CREDITS to a subscriber on payment.
  *
  * Mirrors ensureMonthlyGrant's pattern: advisory lock → idempotent insert.
- * Idempotency key: stripeRef (the Stripe event.id) — stored in the partial
- * unique index credit_ledger_stripe_ref_unique (WHERE stripe_ref IS NOT NULL).
+ * Idempotency key: stripeRef (the Stripe invoice.id — the money object, NOT
+ * event.id, so two event envelopes wrapping the same invoice dedupe) — stored
+ * in the partial unique index credit_ledger_stripe_ref_unique (WHERE stripe_ref IS NOT NULL).
  *
  * onConflictDoNothing() without a target lets Postgres resolve the conflict
  * against any matching unique constraint — the partial index above fires when

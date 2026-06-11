@@ -156,15 +156,19 @@ export async function handleStripeEvent(
       // Idempotency key = invoice.id (the money object), NOT event.id.
       // This means both a duplicate delivery of the same event AND two different
       // event envelopes wrapping the same invoice both resolve to ONE ledger row.
-      await grantSubscriptionCredits(database, customer.userId, invoice.id);
+      const { granted } = await grantSubscriptionCredits(database, customer.userId, invoice.id);
 
-      // Ensure status is 'active' — covers invoice.paid arriving before
-      // checkout.session.completed (ordering race), so a paying user is never
-      // stuck with status 'none'.
-      await database
-        .update(s.billingCustomers)
-        .set({ subscriptionStatus: 'active', updatedAt: new Date() })
-        .where(eq(s.billingCustomers.stripeCustomerId, stripeCustomerId));
+      // Flip status to 'active' ONLY for a fresh grant — covers invoice.paid
+      // arriving before checkout.session.completed (ordering race) without
+      // letting a REDELIVERED already-granted invoice resurrect a canceled
+      // subscription (which would 409-block resubscribing forever). A genuine
+      // resubscribe arrives as a new invoice → granted=true → flips correctly.
+      if (granted) {
+        await database
+          .update(s.billingCustomers)
+          .set({ subscriptionStatus: 'active', updatedAt: new Date() })
+          .where(eq(s.billingCustomers.stripeCustomerId, stripeCustomerId));
+      }
 
       return { status: 200, body: { received: true } };
     }
