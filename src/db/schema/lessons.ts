@@ -22,6 +22,8 @@ export const lessons = pgTable(
     verificationStatus: verificationStatus('verification_status').notNull().default('pending'),
     faithfulnessScore: real('faithfulness_score'),
     zpdSnapshot: jsonb('zpd_snapshot').notNull().default({}),
+    // Promoted from zpdSnapshot in Phase 5 — stream route reads column ?? snapshot for back-compat.
+    workflowRunId: text('workflow_run_id'),
     modelVersion: text('model_version'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

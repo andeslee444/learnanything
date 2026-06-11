@@ -56,13 +56,15 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
   }
 
   // C1: start with catch to mark lesson failed rather than orphaning it.
-  // Persist runId in zpdSnapshot so the stream route can look it up later.
-  // Atomic jsonb merge avoids a read-merge-write race.
+  // Persist runId in both workflowRunId column AND zpdSnapshot (keep jsonb merge for one phase — stream reads column ?? snapshot).
   start(generateLessonWorkflow, [lesson.id]).then(async (run) => {
     try {
       await db
         .update(s.lessons)
-        .set({ zpdSnapshot: sql`zpd_snapshot || ${JSON.stringify({ workflowRunId: run.runId })}::jsonb` })
+        .set({
+          workflowRunId: run.runId,
+          zpdSnapshot: sql`zpd_snapshot || ${JSON.stringify({ workflowRunId: run.runId })}::jsonb`,
+        })
         .where(eq(s.lessons.id, lesson.id));
     } catch (err) {
       console.error('failed to persist workflowRunId', err);

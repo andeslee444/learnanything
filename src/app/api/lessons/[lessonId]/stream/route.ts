@@ -31,8 +31,9 @@ export async function resolveStreamRunId(
   const [track] = await dbArg.select().from(s.tracks).where(eq(s.tracks.id, lesson.trackId));
   if (!track || track.learnerId !== learnerId) return { ok: false, status: 404, error: 'not found' };
   if (TERMINAL_LESSON_STATUSES.has(lesson.status)) return { ok: false, status: 409, error: 'lesson_terminal' };
+  // Prefer the dedicated column (written in Phase 5+); fall back to zpdSnapshot for rows written in earlier phases.
   const snapshot = lesson.zpdSnapshot as Record<string, unknown> | null;
-  const runId = snapshot?.workflowRunId;
+  const runId = lesson.workflowRunId ?? snapshot?.workflowRunId;
   if (!runId || typeof runId !== 'string') return { ok: false, status: 404, error: 'run_not_started' };
   return { ok: true, runId };
 }
