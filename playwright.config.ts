@@ -8,6 +8,7 @@ dotenvConfig({ path: '.env.local', override: true });
 export default defineConfig({
   testDir: './e2e',
   timeout: 60_000,
+  globalSetup: './e2e/global-setup.ts', // warm route compilation on cold CI runners (observed flake 2026-06-11)
   use: { baseURL: 'http://localhost:3100' },
   workers: 1, // no parallelism — multiple specs share one server; avoids debounce collisions and auth-state races
   webServer: {
