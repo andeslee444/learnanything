@@ -12,8 +12,9 @@ export const learners = pgTable('learners', {
   displayName: text('display_name').notNull(),
   ageBand: ageBand('age_band').notNull(),
   provenance: provenance('provenance').notNull().default('consumer'),
-  // Reserved for Kids mode / family accounts (spec §4) — unused in v1:
-  parentUserId: text('parent_user_id').references(() => user.id),
+  // Reserved for Kids mode / family accounts (spec §4) — unused in v1.
+  // onDelete:'set null' prevents parent-account deletion from blocking child user deletion.
+  parentUserId: text('parent_user_id').references(() => user.id, { onDelete: 'set null' }),
   profile: jsonb('profile').notNull().default({}), // soft prefs/engagement notes
   fsrsParams: real('fsrs_params').array(), // per-learner FSRS weights, null = defaults
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

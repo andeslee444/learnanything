@@ -125,6 +125,34 @@ describe('learner domain', () => {
     expect(reloaded.updatedAt.getTime()).toBeGreaterThan(mission.updatedAt.getTime());
   });
 
+  it('deleting parent user sets parentUserId to null on child learner (set null cascade)', async () => {
+    // Seed user A (the child) with a learner whose parentUserId points to user B.
+    const [userA] = await testDb
+      .insert(s.user)
+      .values({ id: crypto.randomUUID(), name: 'ChildUser', email: `${crypto.randomUUID()}@t.dev` })
+      .returning();
+    const [userB] = await testDb
+      .insert(s.user)
+      .values({ id: crypto.randomUUID(), name: 'ParentUser', email: `${crypto.randomUUID()}@t.dev` })
+      .returning();
+    const [learnerA] = await testDb
+      .insert(s.learners)
+      .values({ userId: userA.id, displayName: 'ChildLearner', ageBand: '18_plus', parentUserId: userB.id })
+      .returning();
+
+    // Delete user B (the parent).
+    await testDb.delete(s.user).where(eq(s.user.id, userB.id));
+
+    // Learner A must survive with parentUserId set to null.
+    const [reloaded] = await testDb.select().from(s.learners).where(eq(s.learners.id, learnerA.id));
+    expect(reloaded).toBeDefined();
+    expect(reloaded.parentUserId).toBeNull();
+
+    // User A must still exist.
+    const [stillA] = await testDb.select().from(s.user).where(eq(s.user.id, userA.id));
+    expect(stillA).toBeDefined();
+  });
+
   it('deleting a track cascades to its records and glossary', async () => {
     const { track } = await seedLearnerTrack();
     const [record] = await testDb

@@ -7,6 +7,7 @@ import { getLearnerByUserId } from '@/server/learners';
 import { getDueCount } from '@/lib/reviews';
 import { SignOutButton } from '@/components/signout-button';
 import { SessionNudge } from '@/components/session-nudge';
+import { Footer } from '@/components/footer';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -33,11 +34,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               {dueCount} due
             </Link>
           )}
+          <Link
+            href="/billing"
+            data-testid="nav-billing"
+            className="text-sm text-ink-600 hover:text-sky-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+          >
+            Billing
+          </Link>
           <SignOutButton />
         </nav>
       </header>
       {children}
       <SessionNudge />
+      <Footer />
     </div>
   );
 }

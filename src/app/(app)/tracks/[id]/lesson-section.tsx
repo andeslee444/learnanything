@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { UpgradePrompt } from '@/app/(app)/billing/billing-actions';
+import { classifyLessonError } from '@/lib/lesson-error';
 
 type LessonCard = {
   id: string;
@@ -55,25 +57,38 @@ export function LessonSection({ trackId, lessons, hasNodes }: Props) {
     try {
       const res = await fetch(`/api/tracks/${trackId}/lessons`, { method: 'POST' });
 
-      if (res.status === 402) {
+      // Parse body once for classification.
+      let body: { error?: string; lessonId?: string } | null = null;
+      try {
+        body = (await res.json()) as { error?: string; lessonId?: string };
+      } catch {
+        // body may not be JSON (e.g. 5xx with HTML)
+      }
+
+      const kind = classifyLessonError(res.status, body);
+
+      if (kind === 'credits') {
         setStartState({ kind: 'credits_error' });
         return;
       }
-      if (res.status === 409) {
-        const body = (await res.json()) as { error?: string };
-        if (body.error === 'already_generating') {
-          setStartState({ kind: 'already_generating' });
-          return;
-        }
-        setStartState({ kind: 'error', message: 'Track must be initialized before starting a lesson.' });
+      if (kind === 'already_generating') {
+        setStartState({ kind: 'already_generating' });
         return;
       }
-      if (!res.ok) {
-        setStartState({ kind: 'error', message: 'Something went wrong — please try again.' });
+      if (kind === 'error') {
+        const msg =
+          res.status === 409
+            ? 'Track must be initialized before starting a lesson.'
+            : 'Something went wrong — please try again.';
+        setStartState({ kind: 'error', message: msg });
         return;
       }
 
-      const { lessonId } = (await res.json()) as { lessonId: string };
+      const lessonId = body?.lessonId;
+      if (!lessonId) {
+        setStartState({ kind: 'error', message: 'Unexpected response — please try again.' });
+        return;
+      }
       router.push(`/tracks/${trackId}/lessons/${lessonId}`);
     } catch {
       setStartState({ kind: 'error', message: 'Network error — please check your connection.' });
@@ -125,16 +140,9 @@ export function LessonSection({ trackId, lessons, hasNodes }: Props) {
         <p className="mt-2 text-sm text-ink-600">No lessons yet — start your first one below.</p>
       )}
 
-      {/* Credits notice */}
+      {/* Upgrade prompt — 402 insufficient credits */}
       {startState.kind === 'credits_error' && (
-        <div
-          data-testid="credits-notice"
-          className="mt-4 rounded-xl border border-sun-300 bg-sun-100 px-5 py-3"
-          role="alert"
-        >
-          <p className="text-sm text-sun-700 font-medium">Out of credits this month</p>
-          <p className="mt-1 text-xs text-ink-600">Your monthly lesson credits will renew at the start of next month.</p>
-        </div>
+        <UpgradePrompt onDismiss={() => setStartState({ kind: 'idle' })} />
       )}
 
       {/* Already generating notice */}

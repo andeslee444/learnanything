@@ -1,6 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as s from '@/db/schema';
+import { SUBSCRIPTION_MONTHLY_CREDITS } from './stripe';
 
 type Db = NodePgDatabase<typeof s>;
 
@@ -9,6 +10,7 @@ export const FREE_MONTHLY_GRANT = 3;
 // Advisory-lock domains — keep distinct so user-level and hold-level serialization never collide.
 const LOCK_DOMAIN_USER = 1;
 const LOCK_DOMAIN_HOLD = 2;
+// LOCK_DOMAIN_TRACK_UPLOADS = 3 (used by upload service; listed here for reference)
 
 export class InsufficientCreditsError extends Error {
   constructor() {
@@ -17,7 +19,11 @@ export class InsufficientCreditsError extends Error {
   }
 }
 
-/** Idempotent: grants FREE_MONTHLY_GRANT once per calendar month (UTC — single global boundary by design). No rollover. */
+/**
+ * Idempotent: grants FREE_MONTHLY_GRANT once per calendar month (UTC — single global boundary by design). No rollover.
+ * Deliberately also granted to active subscribers — the free tier is universal;
+ * subscription credits stack on top (decision 2026-06-11).
+ */
 export async function ensureMonthlyGrant(db: Db, userId: string): Promise<void> {
   await db.transaction(async (tx) => {
     // Serialize concurrent grant checks per user (same advisory-lock pattern as placeHold).
@@ -104,3 +110,40 @@ async function settleHold(db: Db, holdId: string, entryType: 'capture' | 'refund
 
 export const captureHold = (db: Db, holdId: string) => settleHold(db, holdId, 'capture');
 export const refundHold = (db: Db, holdId: string) => settleHold(db, holdId, 'refund');
+
+/**
+ * Grant SUBSCRIPTION_MONTHLY_CREDITS to a subscriber on payment.
+ *
+ * Mirrors ensureMonthlyGrant's pattern: advisory lock → idempotent insert.
+ * Idempotency key: stripeRef (the Stripe invoice.id — the money object, NOT
+ * event.id, so two event envelopes wrapping the same invoice dedupe) — stored
+ * in the partial unique index credit_ledger_stripe_ref_unique (WHERE stripe_ref IS NOT NULL).
+ *
+ * onConflictDoNothing() without a target lets Postgres resolve the conflict
+ * against any matching unique constraint — the partial index above fires when
+ * the same stripeRef arrives a second time (duplicate webhook delivery).
+ * The .returning() result is empty on a no-op, so we return { granted: false }.
+ *
+ * Returns { granted: true } on first insert, { granted: false } on duplicate.
+ */
+export async function grantSubscriptionCredits(
+  db: Db,
+  userId: string,
+  stripeRef: string
+): Promise<{ granted: boolean }> {
+  return db.transaction(async (tx) => {
+    // Serialize concurrent grants per user — same lock domain as ensureMonthlyGrant.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${LOCK_DOMAIN_USER}, hashtext(${userId}))`);
+    const rows = await tx
+      .insert(s.creditLedger)
+      .values({
+        userId,
+        entryType: 'purchase',
+        amount: SUBSCRIPTION_MONTHLY_CREDITS,
+        stripeRef,
+      })
+      .onConflictDoNothing()
+      .returning();
+    return { granted: rows.length > 0 };
+  });
+}

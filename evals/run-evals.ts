@@ -6,7 +6,7 @@
  *   npm run evals -- --live    — asks for --yes confirmation; runs real models (costs money)
  *   npm run evals -- --live --yes  — live mode confirmed; runs real models
  *
- * In fake mode all 10 cases produce identical fixture content (same fixture is served for every
+ * In fake mode all 36 cases produce identical fixture content (same fixture is served for every
  * AI_FAKE_LLM call). The harness asserts PIPELINE MECHANICS, not generation quality.
  *
  * Generation-quality judging arrives when live keys + LangSmith land.
@@ -33,6 +33,14 @@ import { stripContentAnswerKey } from '../src/app/api/lessons/[lessonId]/route.j
 import { distillLesson } from '../src/server/lessons/distiller.js';
 import { verifyBlock } from '../src/server/lessons/verify.js';
 import { pickArticleIndexes, computeFinalize, maybeAlertFaithfulness } from '../src/server/lessons/verdicts.js';
+import {
+  PROGRAMMING_TIER1_DOMAINS,
+  PROGRAMMING_TIER2_DOMAINS,
+  HISTORY_TIER1_DOMAINS,
+  HISTORY_TIER2_DOMAINS,
+  MATH_TIER1_DOMAINS,
+  SCIENCE_TIER1_DOMAINS,
+} from '../src/lib/trust-seed-domains.js';
 
 // ── flags ─────────────────────────────────────────────────────────────────────
 
@@ -67,6 +75,42 @@ interface EvalCase {
   vertical: string;
   topic: string;
   levelBand: 'novice' | 'developing' | 'competent';
+  ageBand: '13_15' | '16_17' | '18_plus';
+}
+
+// Expected matrix dimensions
+const EXPECTED_VERTICALS  = ['programming', 'history', 'math', 'science'] as const;
+const EXPECTED_AGE_BANDS  = ['13_15', '16_17', '18_plus'] as const;
+const EXPECTED_LEVEL_BANDS = ['novice', 'developing', 'competent'] as const;
+const EXPECTED_CASE_COUNT = EXPECTED_VERTICALS.length * EXPECTED_AGE_BANDS.length * EXPECTED_LEVEL_BANDS.length; // 36
+
+function assertMatrixComplete(cases: EvalCase[]): void {
+  if (cases.length !== EXPECTED_CASE_COUNT) {
+    throw new Error(
+      `Matrix assertion failed: expected ${EXPECTED_CASE_COUNT} cases, got ${cases.length}`,
+    );
+  }
+  for (const vertical of EXPECTED_VERTICALS) {
+    for (const ageBand of EXPECTED_AGE_BANDS) {
+      for (const levelBand of EXPECTED_LEVEL_BANDS) {
+        const found = cases.some(
+          (c) => c.vertical === vertical && c.ageBand === ageBand && c.levelBand === levelBand,
+        );
+        if (!found) {
+          throw new Error(
+            `Matrix assertion failed: missing cell vertical=${vertical} ageBand=${ageBand} levelBand=${levelBand}`,
+          );
+        }
+      }
+    }
+  }
+  // Check all ids are unique
+  const ids = cases.map((c) => c.id);
+  const uniqueIds = new Set(ids);
+  if (uniqueIds.size !== ids.length) {
+    const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+    throw new Error(`Matrix assertion failed: duplicate case ids: ${dupes.join(', ')}`);
+  }
 }
 
 function loadCases(): EvalCase[] {
@@ -81,12 +125,17 @@ function loadCases(): EvalCase[] {
     throw new Error('cases.json must be an array');
   }
   for (const item of parsed) {
-    if (!item.id || !item.vertical || !item.topic || !item.levelBand) {
+    if (!item.id || !item.vertical || !item.topic || !item.levelBand || !item.ageBand) {
       throw new Error(`Invalid case item (missing required field): ${JSON.stringify(item)}`);
     }
   }
 
-  return parsed as EvalCase[];
+  const cases = parsed as EvalCase[];
+
+  // Startup assertion: cases must form a complete distinct vertical×age×level matrix.
+  assertMatrixComplete(cases);
+
+  return cases;
 }
 
 // ── orphan sweep ─────────────────────────────────────────────────────────────
@@ -102,18 +151,18 @@ async function sweepOrphanFixtures(db: ReturnType<typeof drizzle>) {
 }
 
 // ── trust-domain seeds ────────────────────────────────────────────────────────
-// Minimal allowlist: fixture pipeline uses sources from these domains (matching
-// the fake 'vet-sources' fixture which trusts docs.python.org + MDN + realpython.com).
-// history fixture sources use britannica.com + worldhistory.org.
+// Allowlist for the eval harness — sourced from the shared trust-seed-domains
+// module (same lists used by scripts/seed-trust-domains.ts).
 // Insert via onConflictDoNothing — safe to call repeatedly.
-
-const PROGRAMMING_DOMAINS = ['docs.python.org', 'developer.mozilla.org', 'realpython.com'];
-const HISTORY_DOMAINS     = ['britannica.com', 'worldhistory.org', 'loc.gov'];
 
 async function ensureAllowlist(db: ReturnType<typeof drizzle>) {
   const seeds = [
-    ...PROGRAMMING_DOMAINS.map((domain) => ({ vertical: 'programming', domain, tier: 'tier1' as const, note: 'eval-harness seed' })),
-    ...HISTORY_DOMAINS.map((domain)     => ({ vertical: 'history',     domain, tier: 'tier1' as const, note: 'eval-harness seed' })),
+    ...PROGRAMMING_TIER1_DOMAINS.map((domain) => ({ vertical: 'programming', domain, tier: 'tier1' as const, note: 'eval-harness seed' })),
+    ...PROGRAMMING_TIER2_DOMAINS.map((domain) => ({ vertical: 'programming', domain, tier: 'tier2' as const, note: 'eval-harness seed' })),
+    ...HISTORY_TIER1_DOMAINS.map((domain)     => ({ vertical: 'history',     domain, tier: 'tier1' as const, note: 'eval-harness seed' })),
+    ...HISTORY_TIER2_DOMAINS.map((domain)     => ({ vertical: 'history',     domain, tier: 'tier2' as const, note: 'eval-harness seed' })),
+    ...MATH_TIER1_DOMAINS.map((domain)        => ({ vertical: 'math',        domain, tier: 'tier1' as const, note: 'eval-harness seed' })),
+    ...SCIENCE_TIER1_DOMAINS.map((domain)     => ({ vertical: 'science',     domain, tier: 'tier1' as const, note: 'eval-harness seed' })),
   ];
   await (db as ReturnType<typeof drizzle<typeof s>>)
     .insert(s.trustDomains)
@@ -133,9 +182,9 @@ async function buildFixture(db: Db, c: EvalCase) {
       .values({ id: userId, name: `eval-${c.id}-${RUN_ID}`, email: `eval-${c.id}-${RUN_ID}@eval.internal` })
       .returning();
 
-    // learner
+    // learner — use the case's ageBand (parametrized; was hardcoded '18_plus' before Task 4)
     const [learner] = await tx.insert(s.learners)
-      .values({ userId: user.id, displayName: `eval-${c.id}-${RUN_ID}`, ageBand: '18_plus' })
+      .values({ userId: user.id, displayName: `eval-${c.id}-${RUN_ID}`, ageBand: c.ageBand })
       .returning();
 
     // track

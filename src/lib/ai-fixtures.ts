@@ -181,7 +181,7 @@ export const fakeOutputs: Record<LlmPurpose, unknown> = {
         type: 'article',
         heading: 'Choosing good names',
         markdown:
-          'Names should say what the value MEANS: `user_count` beats `x`. Future-you reads code far more often than writes it, and clear names are the cheapest documentation there is. Most languages have conventions — follow what the codebase around you does.',
+          'Names should say what the value means. `user_count` is better than `x`. You will read code more than you write it. Clear names act as free notes. Most coding styles have rules — follow the rules used in your project.',
         citationUrls: ['https://developer.mozilla.org/en-US/docs/Learn/JavaScript/First_steps'],
       },
       {
