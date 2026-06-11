@@ -62,8 +62,9 @@ export async function moderateText(
       prompt: `Context: ${context}\n<text>\n${text.slice(0, maxChars)}\n</text>`,
       modelOverride: opts?.modelOverride,
     });
-    // Alert the founder when content is flagged (not allowed, not an error).
-    if (!result.allowed && !result.errored) {
+    // Alert the founder when content is flagged (not allowed).
+    // result here is always from the LLM (not the error path), so errored is never true here.
+    if (!result.allowed) {
       alertFounder('moderation_flag', { context, reason: result.reason });
     }
     return result;

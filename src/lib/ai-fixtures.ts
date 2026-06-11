@@ -116,6 +116,12 @@ export const fakeOutputs: Record<LlmPurpose, unknown> = {
     citationUrls: ['https://docs.python.org/3/tutorial/index.html'],
   },
 
+  // Phase 7 — tutor: hint-only reply, never a full solution, crisis=false
+  tutor: {
+    reply: 'Think about what the box holds after the second assignment — what replaced the 5?',
+    crisis: false,
+  },
+
   'create-reference-doc': {
     title: 'Variables and types',
     docType: 'cheat_sheet',

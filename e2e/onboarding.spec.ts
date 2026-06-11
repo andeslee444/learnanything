@@ -129,6 +129,19 @@ test('signup → mission interview → learning map → calibration → lesson j
     { timeout: 30_000, intervals: [1_000] },
   ).toBeGreaterThanOrEqual(1);
 
+  // ── 7c. Tutor panel — ask a question → fixture reply visible ──────────────
+  // The tutor-panel is rendered under the lesson blocks once status=ready.
+  // Click to expand → type a question → submit → fixture reply appears.
+  await expect(page.getByTestId('tutor-panel')).toBeVisible({ timeout: 10_000 });
+  // Open the panel
+  await page.getByTestId('tutor-panel').getByRole('button', { name: /Ask the AI tutor/ }).click();
+  // Wait for input to appear
+  await expect(page.getByTestId('tutor-input')).toBeVisible({ timeout: 5_000 });
+  await page.getByTestId('tutor-input').fill('What does the box metaphor mean?');
+  await page.getByTestId('tutor-send').click();
+  // Fixture reply: 'Think about what the box holds after the second assignment — what replaced the 5?'
+  await expect(page.getByText(/Think about what the box holds/)).toBeVisible({ timeout: 15_000 });
+
   // ── 8. Body quiz: q1 ─────────────────────────────────────────
   // No opener items — this e2e learner has no glossary terms at lesson #1
   // (glossary is seeded by research extraction; the e2e uses fake mode which
