@@ -16,21 +16,25 @@ export type AlertKind = 'faithfulness' | 'moderation_flag' | 'crisis';
 
 /**
  * Fire a structured founder alert.
- * Always console.warn. When ADMIN_EMAILS set, also emails the first admin.
+ * Always console.warn (full payload including reason — log-only is fine for server logs).
+ * When ADMIN_EMAILS set, also emails the first admin with `reason` stripped.
  * Fire-and-forget with .catch so alerts never throw into callers.
  */
 export function alertFounder(kind: AlertKind, payload: Record<string, unknown>): void {
+  // Full payload (including reason) goes to server logs only — greppable, not emailed.
   console.warn('[founder-alert]', kind, JSON.stringify(payload));
 
   const adminEmails = process.env.ADMIN_EMAILS;
   if (adminEmails) {
     const firstAdmin = adminEmails.split(',')[0].trim();
     if (firstAdmin) {
+      // Content discipline: LLM-generated `reason` may quote learner content — log-only, never email.
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { reason: _reason, ...emailSafe } = payload;
       sendEmail({
         to: firstAdmin,
         subject: `[LearnAnything alert] ${kind}`,
-        // Payloads are content-free by discipline — JSON.stringify is safe.
-        text: JSON.stringify(payload),
+        text: JSON.stringify(emailSafe),
       }).catch(() => {
         // Fire-and-forget: swallow errors so alerts never throw into callers.
       });

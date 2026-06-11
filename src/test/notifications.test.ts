@@ -8,7 +8,9 @@
  * 4. Cron auth guard: 200 with correct bearer.
  * 5. review-digest: seed learners w/ due cards → runReviewDigest returns correct recipients/counts.
  * 6. mission-report: seed learner with win_check pass events → runMissionReport returns correct recipients.
- * 7. deliver hook: sendEmail spy asserts subject contains objective, text does NOT contain lesson content.
+ *    Also: regression for new-terms count (track-scoped glossary_terms.created_at, not review_cards.due).
+ * 7. deliver hook: deliver() calls sendLessonReadyEmail → fires email to learner.
+ * 8. alertFounder: reason redacted from email, present in console.warn.
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
@@ -365,17 +367,196 @@ describe('runMissionReport — seeded win_check pass events', () => {
     const result = await runMissionReport(testDb, futureDate);
     expect(result.recipients).toBe(0);
   });
+
+  it('new-terms count: track-scoped glossary term created NOW is counted', async () => {
+    // Regression for the bug where review_cards.due (FSRS future timestamp) was used.
+    // Correct fix: count glossary_terms.created_at >= windowStart, scoped to the track.
+    const u = await seedUser('newterms-u1');
+    const learner = await seedLearner(u.id, 'newterms-l1');
+    const track = await seedTrack(learner.id, 'New Terms Track');
+
+    // Seed a lesson + win_check event in the window.
+    const [lesson] = await testDb
+      .insert(s.lessons)
+      .values({
+        trackId: track.id,
+        seq: 1,
+        spec: { objective: 'Obj', nodeId: 'n1', levelBand: 'novice', topic: 'NT' },
+        status: 'ready',
+      })
+      .returning();
+    await testDb.insert(s.attemptEvents).values({
+      learnerId: learner.id,
+      lessonId: lesson.id,
+      blockId: 'wc-1',
+      eventType: 'win_check',
+      correct: true,
+      createdAt: new Date(Date.now() - 60_000),
+    });
+
+    // Seed a learning record (required for glossary_terms FK).
+    const [lr] = await testDb
+      .insert(s.learningRecords)
+      .values({ trackId: track.id, seq: 1, recordType: 'prior_knowledge', title: 'T', body: 'B', evidence: {} })
+      .returning();
+
+    // (a) Glossary term created NOW on the reported track → must be counted.
+    await testDb.insert(s.glossaryTerms).values({
+      trackId: track.id,
+      term: 'recent-term',
+      definition: 'Created just now.',
+      promotionEvidenceRecordId: lr.id,
+    });
+
+    // (b) Glossary term created 30 days ago on the same track → must NOT be counted.
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    await testDb
+      .insert(s.glossaryTerms)
+      .values({
+        trackId: track.id,
+        term: 'old-term',
+        definition: 'Created long ago.',
+        promotionEvidenceRecordId: lr.id,
+        createdAt: thirtyDaysAgo,
+      });
+
+    // (c) A review card with a future `due` timestamp — must NOT influence the count.
+    await testDb.insert(s.reviewCards).values({
+      learnerId: learner.id,
+      glossaryTermId: (
+        await testDb.select({ id: s.glossaryTerms.id }).from(s.glossaryTerms)
+          .where(eq(s.glossaryTerms.term, 'recent-term'))
+          .limit(1)
+      )[0].id,
+      due: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // future due date
+      stability: 1, difficulty: 1, elapsedDays: 0, scheduledDays: 1, reps: 0, lapses: 0,
+    });
+
+    const emailModule = await import('@/lib/email');
+    const sendSpy = vi.spyOn(emailModule, 'sendEmail').mockResolvedValue({ sent: false, transport: 'log' });
+
+    try {
+      const { runMissionReport } = await import('@/app/api/cron/mission-report/route');
+      const since = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000); // 8-day window
+      await runMissionReport(testDb, since);
+
+      // Find the email for this track's topic.
+      const texts = sendSpy.mock.calls.map((call) => call[0].text);
+      const trackTexts = texts.filter((t) => t.includes('New Terms Track'));
+      expect(trackTexts.length).toBeGreaterThanOrEqual(1);
+
+      // Only the 1 recent term should appear in the count — "1 new term".
+      // The old term (30 days ago) must not be counted.
+      // The review card's future due date must not inflate the count.
+      for (const text of trackTexts) {
+        expect(text).toContain('1 new term');
+        // Must use singular (not plural) because count = 1.
+        expect(text).not.toContain('2 new terms');
+      }
+    } finally {
+      sendSpy.mockRestore();
+    }
+  });
 });
 
-// ── 7. deliver hook: sendLessonReadyEmail content discipline ──────────────────
+// ── 7. deliver hook: deliver() fires sendLessonReadyEmail ─────────────────────
 //
-// We test sendLessonReadyEmail directly (exported from pipeline.ts) rather than
-// going through the full pipeline. This avoids ES module live-binding issues
-// with the fire-and-forget path and is a cleaner unit test of the email shape.
+// Proves that deleting the sendLessonReadyEmail call in deliver() would break
+// this test. Seeds a generating lesson, runs deliver (via stageGenerate on a
+// fully-seeded pipeline), then asserts sendEmail was called with subject
+// containing the objective and to = the learner's email.
 //
-// The spec requirement is: "subject contains objective, text contains NO lesson
-// content". We seed a lesson with known spec.objective text and known article
-// content, then assert the email args comply.
+// deliver() fire-and-forgets the email; we flush with a short await.
+
+describe('deliver hook — deliver() calls sendLessonReadyEmail', () => {
+  it('deliver fires email to learner with subject containing the lesson objective', async () => {
+    // Reuse seedFullTrack pattern from lesson-pipeline.test.ts.
+    const suffix = `dhook-${Date.now()}`;
+    const u = await seedUser(suffix);
+    const learner = await seedLearner(u.id, suffix);
+    const track = await seedTrack(learner.id, 'Deliver Hook Topic');
+
+    // Seed the minimum needed for stageGenerate: mission + skill node + trust domain + hold.
+    await testDb.insert(s.missions).values({
+      trackId: track.id,
+      whyText: 'learn it',
+      successCriteria: [{ description: 'ok' }],
+      constraints: {},
+      outOfScope: [],
+    });
+    await testDb.insert(s.skillNodes).values({
+      trackId: track.id,
+      name: 'Deliver Hook Node',
+      summary: 'A test node',
+      missionRelevance: 0.9,
+    });
+    // Learning record for glossary FK.
+    const [lr] = await testDb
+      .insert(s.learningRecords)
+      .values({ trackId: track.id, seq: 1, recordType: 'prior_knowledge', title: 'T', body: 'B', evidence: {} })
+      .returning();
+    await testDb.insert(s.glossaryTerms).values({
+      trackId: track.id,
+      term: 'dhook-term',
+      definition: 'A hook term.',
+      promotionEvidenceRecordId: lr.id,
+    });
+    // Trust domain so research can resolve (AI_FAKE_LLM=1 is set in beforeAll).
+    await testDb
+      .insert(s.trustDomains)
+      .values({ vertical: 'programming', domain: 'docs.python.org', tier: 'tier1', note: 'test' })
+      .onConflictDoNothing();
+
+    // Credit grant + lesson row.
+    await testDb.insert(s.creditLedger).values({ userId: u.id, entryType: 'grant', amount: 3 });
+    const { createLessonRow, stagePlan, stageResearch, stageGenerate } = await import('@/server/lessons/pipeline');
+    const { placeHold } = await import('@/lib/credits');
+    const lesson = await createLessonRow(testDb, track.id);
+    await placeHold(testDb, u.id, lesson.id);
+
+    // Run plan + research stages so stageGenerate has what it needs.
+    const planResult = await stagePlan(testDb, lesson.id);
+    expect(planResult.status).toBe('planned');
+    const researchResult = await stageResearch(testDb, lesson.id);
+    expect(researchResult.status).toBe('researched');
+
+    // Spy on sendEmail BEFORE calling stageGenerate so the fire-and-forget is captured.
+    const emailModule = await import('@/lib/email');
+    const capturedArgs: { to: string; subject: string; text: string }[] = [];
+    const sendSpy = vi.spyOn(emailModule, 'sendEmail').mockImplementation(async (args) => {
+      capturedArgs.push(args);
+      return { sent: false, transport: 'log' as const };
+    });
+
+    try {
+      const generateResult = await stageGenerate(testDb, lesson.id);
+      expect(generateResult.status).toBe('ready');
+
+      // deliver() fire-and-forgets — flush the microtask queue.
+      await new Promise((r) => setTimeout(r, 50));
+
+      // sendEmail MUST have been called (proves deliver() calls sendLessonReadyEmail).
+      expect(capturedArgs.length).toBeGreaterThan(0);
+
+      // The email must be addressed to the learner's user email.
+      const emailArgs = capturedArgs[0];
+      expect(emailArgs.to).toBe(u.email);
+
+      // Subject must contain the objective (from lesson.spec).
+      expect(emailArgs.subject).toMatch(/^Your lesson is ready/);
+
+      // Text must contain the lesson path (content discipline — no lesson body).
+      expect(emailArgs.text).toContain(`/tracks/${track.id}/lessons/${lesson.id}`);
+    } finally {
+      sendSpy.mockRestore();
+    }
+  });
+});
+
+// ── 7b. sendLessonReadyEmail direct: subject + text content discipline ─────────
+//
+// Directly tests sendLessonReadyEmail (exported from pipeline.ts) for
+// subject format and text content discipline without running the full pipeline.
 
 describe('deliver hook — sendLessonReadyEmail content discipline', () => {
   it('subject contains objective (≤80 chars), text contains lesson path, no article content', async () => {
@@ -416,17 +597,6 @@ describe('deliver hook — sendLessonReadyEmail content discipline', () => {
       })
       .returning();
 
-    // Capture what sendEmail is called with by hooking the log-transport path
-    // (no RESEND_API_KEY in test env). We use a console.log spy to avoid
-    // the ES module binding issue — the email module logs {to, subject} when
-    // transport='log', giving us the subject. For the text, we call
-    // sendLessonReadyEmail directly and capture via spying on the module.
-    //
-    // Since sendLessonReadyEmail is exported and calls sendEmail via a direct
-    // import, we verify the DB-derived subject/text by calling it directly and
-    // checking what would be passed to sendEmail.  We achieve this by temporarily
-    // redirecting the log output and then asserting the subject format:
-
     const { sendLessonReadyEmail } = await import('@/server/lessons/pipeline');
 
     // Capture the args passed to sendEmail by checking the email module log.
@@ -452,9 +622,7 @@ describe('deliver hook — sendLessonReadyEmail content discipline', () => {
         expect(logged.subject).not.toContain(ARTICLE_MARKER);
       }
 
-      // Also verify the text via a second call that captures the actual sendEmail args.
-      // We use the actual sendEmail module directly (no RESEND_API_KEY → log only).
-      // Re-import the email module to inspect what the pipeline would produce:
+      // Also verify via a spy on the email module to capture text.
       const emailModule = await import('@/lib/email');
       const capturedArgs: { to: string; subject: string; text: string }[] = [];
       const sendSpy = vi.spyOn(emailModule, 'sendEmail').mockImplementation(async (args) => {
@@ -463,33 +631,18 @@ describe('deliver hook — sendLessonReadyEmail content discipline', () => {
       });
 
       try {
-        // Call sendLessonReadyEmail again — this time the spy intercepts.
-        // Note: pipeline.ts has its own direct import of sendEmail. Since vitest
-        // uses a transform that supports live bindings via ESM proxy, this spy
-        // should work. If not, we fall back to verifying the text shape via
-        // the DB query result reconstruction.
         await sendLessonReadyEmail(testDb, lesson.id);
 
-        if (capturedArgs.length > 0) {
-          const emailArgs = capturedArgs[0];
-          // Text must contain the lesson path.
-          expect(emailArgs.text).toContain(`/tracks/${track.id}/lessons/${lesson.id}`);
-          // Text must NOT contain the article content marker (content discipline).
-          expect(emailArgs.text).not.toContain(ARTICLE_MARKER);
-          // Subject must contain objective.
-          expect(emailArgs.subject).toContain(KNOWN_OBJECTIVE.slice(0, 80));
-        } else {
-          // Spy didn't intercept (due to ESM binding). Verify shape via the DB
-          // query path that sendLessonReadyEmail executes: check the objective
-          // is in the spec and the function ran without error (lesson exists in DB).
-          const [dbLesson] = await testDb
-            .select({ spec: s.lessons.spec })
-            .from(s.lessons)
-            .where(eq(s.lessons.id, lesson.id));
-          const spec = dbLesson?.spec as { objective?: string };
-          expect(spec?.objective).toBe(KNOWN_OBJECTIVE);
-          // The function ran without throwing — basic smoke check.
-        }
+        // Fix 4: mandatory — spy interception MUST succeed (not a soft check).
+        expect(capturedArgs.length).toBeGreaterThan(0);
+
+        const emailArgs = capturedArgs[0];
+        // Text must contain the lesson path.
+        expect(emailArgs.text).toContain(`/tracks/${track.id}/lessons/${lesson.id}`);
+        // Text must NOT contain the article content marker (content discipline).
+        expect(emailArgs.text).not.toContain(ARTICLE_MARKER);
+        // Subject must contain objective.
+        expect(emailArgs.subject).toContain(KNOWN_OBJECTIVE.slice(0, 80));
       } finally {
         sendSpy.mockRestore();
       }
@@ -502,5 +655,59 @@ describe('deliver hook — sendLessonReadyEmail content discipline', () => {
     const { sendLessonReadyEmail } = await import('@/server/lessons/pipeline');
     // Non-existent lesson ID — should not throw.
     await expect(sendLessonReadyEmail(testDb, crypto.randomUUID())).resolves.toBeUndefined();
+  });
+});
+
+// ── 8. alertFounder: reason redacted from email, present in console.warn ──────
+
+describe('alertFounder — reason redacted from email (content discipline)', () => {
+  let origAdminEmails: string | undefined;
+
+  beforeEach(() => {
+    origAdminEmails = process.env.ADMIN_EMAILS;
+  });
+  afterEach(() => {
+    if (origAdminEmails !== undefined) {
+      process.env.ADMIN_EMAILS = origAdminEmails;
+    } else {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+
+  it('console.warn carries reason but email text does NOT contain reason', async () => {
+    process.env.ADMIN_EMAILS = 'admin@test.alert';
+
+    const emailModule = await import('@/lib/email');
+    const capturedEmailArgs: { to: string; subject: string; text: string }[] = [];
+    const sendSpy = vi.spyOn(emailModule, 'sendEmail').mockImplementation(async (args) => {
+      capturedEmailArgs.push(args);
+      return { sent: false, transport: 'log' as const };
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const { alertFounder } = await import('@/lib/alerts');
+      alertFounder('moderation_flag', { context: 'x', reason: 'SECRET_QUOTE' });
+
+      // Flush the fire-and-forget sendEmail promise.
+      await new Promise((r) => setTimeout(r, 50));
+
+      // console.warn MUST carry the reason (log channel keeps it).
+      expect(warnSpy).toHaveBeenCalled();
+      const warnArgs = warnSpy.mock.calls.flatMap((call) => call.map((a) => JSON.stringify(a)));
+      expect(warnArgs.some((a) => a.includes('SECRET_QUOTE'))).toBe(true);
+
+      // sendEmail MUST have been called.
+      expect(capturedEmailArgs.length).toBeGreaterThan(0);
+
+      // Email text must NOT contain the reason (content discipline).
+      for (const args of capturedEmailArgs) {
+        expect(args.text).not.toContain('SECRET_QUOTE');
+      }
+    } finally {
+      sendSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 });

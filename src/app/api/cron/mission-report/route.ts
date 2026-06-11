@@ -8,11 +8,11 @@
  * last 7 days, sends a weekly mission report email:
  *   "This week on {topic}: X lessons, Y new terms"
  *
- * "New terms" = review cards created for that learner in the last 7 days.
- * NOTE: review_cards rows are created by the distiller when glossary terms are
- * promoted — so this count approximates new vocabulary introduced this week.
- * We count per-learner (not per-track) because review_cards is learner-scoped,
- * not track-scoped.
+ * "New terms" = glossary_terms rows created for that TRACK in the last 7 days.
+ * glossary_terms has both `track_id` and `created_at`, so the count is
+ * track-scoped and time-bounded — matching the per-track email copy exactly.
+ * (review_cards.due is the FSRS next-review timestamp, not a creation date,
+ * and review_cards is learner-scoped, not track-scoped — wrong on both counts.)
  *
  * Content discipline: only topic names (user-supplied at track creation),
  * lesson counts, and term counts are included — no lesson text, no card content.
@@ -47,8 +47,9 @@ export interface MissionReportResult {
  * Finds learner+track pairs where ≥1 win_check pass attempt_event was created
  * in the last 7 days (window = [since, now]).
  *
- * "New terms" = review_cards created for that learner in the same window.
- * (Cards are keyed to learnerId, not trackId, so we count per learner.)
+ * "New terms" = glossary_terms rows where track_id = the reported track AND
+ * created_at >= windowStart.  glossary_terms is track-scoped and has created_at,
+ * so the count is correct per-track and matches the email copy exactly.
  */
 export async function runMissionReport(db: Db, since?: Date): Promise<MissionReportResult> {
   const now = new Date();
@@ -84,21 +85,21 @@ export async function runMissionReport(db: Db, since?: Date): Promise<MissionRep
       s.user.email,
     );
 
-  // For each learner, count new review cards created in the window.
-  // Build a map: learnerId → newTermCount
-  // (review_cards are learner-scoped, not track-scoped)
+  // For each track, count new glossary terms created in the window.
+  // glossary_terms has track_id + created_at — correct for per-track email copy.
+  // Build a map: trackId → newTermCount
   const termRows = await db
     .select({
-      learnerId: s.reviewCards.learnerId,
-      newTermCount: count(s.reviewCards.id),
+      trackId: s.glossaryTerms.trackId,
+      newTermCount: count(s.glossaryTerms.id),
     })
-    .from(s.reviewCards)
-    .where(gte(s.reviewCards.due, windowStart))
-    .groupBy(s.reviewCards.learnerId);
+    .from(s.glossaryTerms)
+    .where(gte(s.glossaryTerms.createdAt, windowStart))
+    .groupBy(s.glossaryTerms.trackId);
 
-  const termsByLearner = new Map<string, number>();
+  const termsByTrack = new Map<string, number>();
   for (const r of termRows) {
-    termsByLearner.set(r.learnerId, Number(r.newTermCount));
+    termsByTrack.set(r.trackId, Number(r.newTermCount));
   }
 
   const recipients = lessonRows.length;
@@ -107,8 +108,8 @@ export async function runMissionReport(db: Db, since?: Date): Promise<MissionRep
   for (const row of lessonRows) {
     const lessonCount = Number(row.lessonCount);
     if (lessonCount < 1) continue;
-    // Use review cards created in the window as a proxy for new terms this week.
-    const newTermCount = termsByLearner.get(row.learnerId) ?? 0;
+    // Count new glossary terms for this track in the window (track-scoped, time-bounded).
+    const newTermCount = termsByTrack.get(row.trackId) ?? 0;
 
     const result = await sendEmail({
       to: row.userEmail,
