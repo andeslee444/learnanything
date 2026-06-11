@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "reference_docs_track_title" ON "reference_docs" USING btree ("track_id","title");

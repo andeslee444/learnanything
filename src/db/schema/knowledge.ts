@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, real, uuid, pgEnum, primaryKey, check } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, real, uuid, pgEnum, primaryKey, check, uniqueIndex } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { tracks } from './learners';
 
@@ -74,4 +74,6 @@ export const referenceDocs = pgTable('reference_docs', {
   linkedLessonIds: uuid('linked_lesson_ids').array().notNull().default([]), // no FK: lessons table is a later domain
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  uniqueIndex('reference_docs_track_title').on(t.trackId, t.title),
+]);

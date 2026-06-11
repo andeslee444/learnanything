@@ -251,8 +251,8 @@ export async function assembleReviewItem(
   card: DueCardRow,
 ): Promise<ReviewItem> {
   // Distractors: the learner's other glossary definitions across all their tracks,
-  // ordered by term ASC (deterministic), excluding this card's own term.
-  // Same-track terms naturally appear first because the join is consistent.
+  // ordered by term ASC (alphabetical, deterministic), excluding this card's own term.
+  // v2 improvement: prefer same-track distractors for higher conceptual relevance.
   const distractorRows = await db
     .select({
       definition: s.glossaryTerms.definition,

@@ -10,7 +10,7 @@ import { assembleReviewItem, gradeReview } from '@/lib/reviews';
 import type { DueCardRow } from '@/lib/reviews';
 
 const bodySchema = z.object({
-  answerIndex: z.number().int().min(0).max(3),
+  optionText: z.string().min(1).max(500),
 });
 
 /**
@@ -42,9 +42,9 @@ export async function POST(
   const parsed = bodySchema.safeParse(rawBody);
   if (!parsed.success) return NextResponse.json({ error: 'invalid body' }, { status: 400 });
 
-  const { answerIndex } = parsed.data;
+  const { optionText } = parsed.data;
 
-  // Load the card with its glossary term (ownership + full card data for assembleReviewItem)
+  // Load the card with its glossary term (ownership + full card data).
   const rows = await db
     .select({
       id: s.reviewCards.id,
@@ -80,10 +80,14 @@ export async function POST(
 
   const card = rows[0] as DueCardRow;
 
-  // Recompute the item deterministically — same code path as the GET due route.
-  // Determinism: same card id → same distractor set → same shuffled options → same correctIndex.
+  // Grade by comparing the submitted option text against the card's own definition.
+  // This is drift-proof: the distractor set can change between assemble and grade
+  // without affecting correctness — we never rely on a position index.
+  const correct = optionText.trim() === card.definition.trim();
+
+  // Build the item server-side solely to obtain correctOption for the response.
+  // answerIndex leaves the grading path entirely; correctIndex is only used here.
   const item = await assembleReviewItem(db, card);
-  const correct = answerIndex === item.correctIndex;
   const correctOption = item.options[item.correctIndex];
   const explanation = card.definition;
 

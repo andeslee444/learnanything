@@ -204,7 +204,9 @@ export interface DistillResult {
  * Distills a passed win-check lesson into learning records, glossary
  * promotions, and FSRS review cards.
  *
- * All seven behaviors per spec:
+ * Precondition: idempotency guard — no-op if evidence.lessonId already exists.
+ *
+ * Seven steps:
  * 1. Load lesson (must be ready) + attempt events + glossary + records.
  * 2. Admission gate (LLM prompt + code-side dedup).
  * 3. Insert records via nextRecordSeq (FOR UPDATE convention).
@@ -212,7 +214,7 @@ export interface DistillResult {
  *    umbrella record created if LLM returned promotions but zero records.
  * 5. createCardForGlossaryTerm for each promotion (FSRS bridge).
  * 6. Node mastery 'demonstrated' if ≥1 demonstrated_understanding record.
- * 7. Idempotent: no-op if evidence.lessonId already exists.
+ * 7. Upsert reference doc (insert or update-by-title + append lessonId).
  */
 export async function distillLesson(
   db: Db,
@@ -223,7 +225,7 @@ export async function distillLesson(
     modelOverride?: Parameters<typeof llmObject>[0]['modelOverride'];
   },
 ): Promise<DistillResult> {
-  // ── Step 7 (idempotency check first) ─────────────────────────────────────
+  // ── Precondition: idempotency check ──────────────────────────────────────
   const [idempotencyCheck] = await db
     .select({ id: s.learningRecords.id })
     .from(s.learningRecords)
@@ -455,7 +457,7 @@ export async function distillLesson(
     return { recordIds, promotedTermIds, cardIds };
   });
 
-  // ── Step 7: Reference doc — only when records were inserted ──────────────
+  // ── Step 7: Reference doc upsert — only when records were inserted ───────
   let referenceDocId: string | null = null;
 
   if (result.recordIds.length > 0) {
@@ -476,51 +478,37 @@ export async function distillLesson(
       modelOverride: opts.modelOverride,
     });
 
-    // Upsert reference_docs by (trackId, title):
-    //   - If a doc with this title exists for the track: update content + append lessonId
-    //   - Else: insert with linkedLessonIds = [lessonId]
-    const content = { sections: refDocOutput.sections };
+    // Atomic upsert reference_docs on (track_id, title) unique index:
+    //   INSERT ... ON CONFLICT (track_id, title) DO UPDATE SET
+    //     content = excluded.content,
+    //     linked_lesson_ids = CASE WHEN already contains lessonId THEN no-op ELSE array_append END
+    // This is race-free: the unique index (added in migration 0018) ensures
+    // concurrent distillers for the same track can never double-insert a doc.
+    const refContent = { sections: refDocOutput.sections };
 
-    const [existing] = await db
-      .select({ id: s.referenceDocs.id })
-      .from(s.referenceDocs)
-      .where(
-        and(
-          eq(s.referenceDocs.trackId, trackId),
-          eq(s.referenceDocs.title, refDocOutput.title),
-        ),
-      )
-      .limit(1);
-
-    if (existing) {
-      // Update content, append lessonId to linkedLessonIds if not already present.
-      // Uses a parameterized cast: $1::uuid is compared against the array elements.
-      await db
-        .update(s.referenceDocs)
-        .set({
-          content,
+    const [upserted] = await db
+      .insert(s.referenceDocs)
+      .values({
+        trackId,
+        title: refDocOutput.title,
+        docType: refDocOutput.docType,
+        content: refContent,
+        linkedLessonIds: [opts.lessonId],
+      })
+      .onConflictDoUpdate({
+        target: [s.referenceDocs.trackId, s.referenceDocs.title],
+        set: {
+          content: refContent,
           updatedAt: new Date(),
           linkedLessonIds: sql`
-            CASE WHEN ${opts.lessonId}::uuid = ANY(${s.referenceDocs.linkedLessonIds})
-            THEN ${s.referenceDocs.linkedLessonIds}
-            ELSE array_append(${s.referenceDocs.linkedLessonIds}, ${opts.lessonId}::uuid)
+            CASE WHEN NOT (${s.referenceDocs.linkedLessonIds} @> ARRAY[${opts.lessonId}]::uuid[])
+            THEN array_append(${s.referenceDocs.linkedLessonIds}, ${opts.lessonId}::uuid)
+            ELSE ${s.referenceDocs.linkedLessonIds}
             END`,
-        })
-        .where(eq(s.referenceDocs.id, existing.id));
-      referenceDocId = existing.id;
-    } else {
-      const [inserted] = await db
-        .insert(s.referenceDocs)
-        .values({
-          trackId,
-          title: refDocOutput.title,
-          docType: refDocOutput.docType,
-          content,
-          linkedLessonIds: [opts.lessonId],
-        })
-        .returning({ id: s.referenceDocs.id });
-      referenceDocId = inserted.id;
-    }
+        },
+      })
+      .returning({ id: s.referenceDocs.id });
+    referenceDocId = upserted.id;
   }
 
   return {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 
 // ── Types matching the GET /api/reviews/due response ─────────────────────────
@@ -54,7 +54,7 @@ function ReviewCard({ item, liveRef, onGraded }: ReviewCardProps) {
       const res = await fetch(`/api/reviews/${item.cardId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answerIndex }),
+        body: JSON.stringify({ optionText: item.options[answerIndex] }),
       });
 
       if (!mountedRef.current) return;
@@ -218,6 +218,14 @@ export function ReviewSession({ initialItems }: Props) {
       setShowNext(true);
     }
   }
+
+  // Cleanup: clear advance timer on unmount to avoid state updates on an
+  // unmounted component (e.g. user navigates away while the 2s delay is in flight).
+  useEffect(() => {
+    return () => {
+      if (advanceTimerRef.current) clearTimeout(advanceTimerRef.current);
+    };
+  }, []);
 
   function handleNext() {
     if (advanceTimerRef.current) clearTimeout(advanceTimerRef.current);

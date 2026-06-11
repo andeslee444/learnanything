@@ -352,6 +352,9 @@ describe('distillLesson', () => {
       .from(s.glossaryTerms)
       .where(eq(s.glossaryTerms.id, result.promotedTermIds[0]));
     expect(term.promotionEvidenceRecordId).toBe(result.recordIds[0]);
+
+    // Umbrella path also creates a reference doc (step 7 runs whenever recordIds.length > 0)
+    expect(result.referenceDocId).not.toBeNull();
   });
 
   // ── First-attempt-only win-check tally ─────────────────────────────────────

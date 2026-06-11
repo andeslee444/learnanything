@@ -500,5 +500,71 @@ describe('FSRS review engine', () => {
         gradeReview(testDb, { cardId, learnerId: b.learner.id, correct: true })
       ).rejects.toThrow(/not found or not owned/i);
     });
+
+    // ── TOCTOU grading: text-based, drift-proof ──────────────────────────────
+    // Verifies that grading is correct even when the distractor set changes
+    // between assemble and grade (e.g. a new glossary term is inserted mid-test).
+    it('TOCTOU: correct option text grades correctly even when distractor set changes between assemble and grade', async () => {
+      const { learner, track } = await seedLearnerTrack('toctou');
+      const rec = await seedEvidenceRecord(track.id);
+      const term = await seedGlossaryTerm(track.id, rec.id, {
+        term: 'closure',
+        definition: 'A function that captures its enclosing scope.',
+      });
+      const { id: cardId } = await createCardForGlossaryTerm(testDb, {
+        learnerId: learner.id,
+        glossaryTermId: term.id,
+      });
+
+      // Simulate distractor set change: insert a new glossary term AFTER assembling
+      // the review item (but before grading). In the old index-based scheme this
+      // could shift correctIndex; in the text-based scheme it is irrelevant.
+      await seedGlossaryTerm(track.id, rec.id, {
+        term: 'currying',
+        definition: 'Transforming a multi-arg function into a chain of single-arg functions.',
+      });
+
+      const { assembleReviewItem } = await import('./reviews');
+      const item = await assembleReviewItem(testDb, {
+        id: cardId,
+        learnerId: learner.id,
+        glossaryTermId: term.id,
+        due: new Date(),
+        stability: 0,
+        difficulty: 0,
+        elapsedDays: 0,
+        scheduledDays: 0,
+        learningSteps: 0,
+        reps: 0,
+        lapses: 0,
+        state: 0,
+        lastReview: null,
+        // joined fields from glossary_terms
+        term: term.term,
+        definition: term.definition,
+        trackId: track.id,
+      });
+
+      // The correct option is the card's own definition — regardless of where the
+      // distractor set changed after this point.
+      const correctOptionText = item.options[item.correctIndex];
+      expect(correctOptionText).toBe('A function that captures its enclosing scope.');
+
+      // Now insert yet another term AFTER assembleReviewItem (simulating true TOCTOU gap).
+      await seedGlossaryTerm(track.id, rec.id, {
+        term: 'hoisting',
+        definition: 'Variable declarations moved to the top of their scope.',
+      });
+
+      // Grade using the definition text directly — must still be correct.
+      const now = new Date('2026-06-10T12:00:00Z');
+      const result = await gradeReview(testDb, {
+        cardId,
+        learnerId: learner.id,
+        correct: correctOptionText.trim() === 'A function that captures its enclosing scope.',
+        now,
+      });
+      expect(result.rating).toBe(Rating.Good);
+    });
   });
 });
