@@ -77,6 +77,19 @@ export const fakeOutputs: Record<LlmPurpose, unknown> = {
     misconceptions: ['Variables contain values rather than referencing them.'],
   },
   moderation: { allowed: true, reason: 'educational topic' },
+  'distill-records': {
+    records: [
+      {
+        recordType: 'demonstrated_understanding',
+        title: 'Can use variables to store and update values',
+        body: 'The learner correctly identified what a variable does and predicted the result of reassignment on the first attempt. This demonstrates an ability to reason about state changes in a program.',
+        implications: 'Ready to apply variables inside control flow and functions.',
+      },
+    ],
+    glossaryPromotions: [
+      { term: 'variable', definition: 'A named container for a value.' },
+    ],
+  },
   'plan-lesson': {
     objective: 'Declare and use variables to store values',
     format: 'article',

@@ -19,7 +19,8 @@ export type LlmPurpose =
   | 'synthesize-dossier'
   | 'moderation'
   | 'plan-lesson'
-  | 'generate-lesson';
+  | 'generate-lesson'
+  | 'distill-records';
 
 /**
  * Single entry point for structured LLM calls.
