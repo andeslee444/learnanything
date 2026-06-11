@@ -1,4 +1,4 @@
-import { eq, and, count, desc } from 'drizzle-orm';
+import { eq, and, count, desc, sql } from 'drizzle-orm';
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -17,16 +17,25 @@ const MAX_TEXT_LENGTH = 200_000;
 const MAX_FILENAME_LENGTH = 120;
 const ANNOTATION_MAX_CHARS = 300;
 
+// Advisory-lock domains — must not overlap with credits.ts (1=user, 2=hold).
+const LOCK_DOMAIN_TRACK_UPLOADS = 3;
+
 /** Validate that the filename ends in .txt or .md (case-insensitive). */
 function hasAllowedExtension(filename: string): boolean {
   return /\.(txt|md)$/i.test(filename);
+}
+
+/** Code-point-safe truncation — prevents splitting surrogate pairs before Postgres insert. */
+export function truncateAnnotation(s: string, maxChars = ANNOTATION_MAX_CHARS): string {
+  return [...s].slice(0, maxChars).join('');
 }
 
 export const uploadBodySchema = z.object({
   filename: z
     .string()
     .max(MAX_FILENAME_LENGTH)
-    .refine(hasAllowedExtension, { message: 'Only .txt and .md files are accepted' }),
+    .refine(hasAllowedExtension, { message: 'Only .txt and .md files are accepted' })
+    .refine((s) => !/[<>]/.test(s), { message: 'Filename contains invalid characters' }),
   text: z.string().min(1).max(MAX_TEXT_LENGTH),
 });
 
@@ -110,24 +119,52 @@ export async function handleUpload(
   const rawAnnotation = claimTexts.length > 0
     ? claimTexts.join(' | ')
     : 'learner-provided context';
-  const annotation = rawAnnotation.slice(0, ANNOTATION_MAX_CHARS);
+  const annotation = truncateAnnotation(rawAnnotation);
 
-  // Insert resource — no raw text stored anywhere in the row
-  const [resource] = await db
-    .insert(s.resources)
-    .values({
-      trackId,
-      title: filename,
-      url: pseudoUrl,
-      resourceType: 'article',
-      kind: 'knowledge',
-      origin: 'user_upload',
-      annotation,
-      extraction: extraction as typeof s.resources.$inferInsert['extraction'],
-    })
-    .returning();
+  // Insert resource inside a transaction — advisory lock (domain 3, track uploads) re-checks
+  // the count atomically so two concurrent uploads at 9 cannot both slip past the cap.
+  const insertResult = await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(${LOCK_DOMAIN_TRACK_UPLOADS}, hashtext(${trackId}))`,
+    );
+    const [freshCount] = await tx
+      .select({ n: count() })
+      .from(s.resources)
+      .where(
+        and(
+          eq(s.resources.trackId, trackId),
+          eq(s.resources.origin, 'user_upload'),
+        ),
+      );
+    if (Number(freshCount?.n ?? 0) >= MAX_UPLOADS_PER_TRACK) {
+      return { capped: true } as const;
+    }
+    // No raw text stored anywhere in the row (spec §6)
+    const [resource] = await tx
+      .insert(s.resources)
+      .values({
+        trackId,
+        title: filename,
+        url: pseudoUrl,
+        resourceType: 'article',
+        kind: 'knowledge',
+        origin: 'user_upload',
+        annotation,
+        extraction: extraction as typeof s.resources.$inferInsert['extraction'],
+      })
+      .returning();
+    return { capped: false, resource } as const;
+  });
 
-  return { status: 201, resourceId: resource.id, annotation };
+  if (insertResult.capped) {
+    return {
+      status: 409,
+      error: 'upload_cap_reached',
+      message: `Maximum ${MAX_UPLOADS_PER_TRACK} uploads per track`,
+    };
+  }
+
+  return { status: 201, resourceId: insertResult.resource.id, annotation };
 }
 
 export async function GET(

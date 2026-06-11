@@ -114,7 +114,10 @@ function buildLearnerContextBlock(uploads: UploadSummary[]): string {
   let charCount = 0;
   for (const upload of uploads) {
     for (const c of upload.claims) {
-      const line = `[${upload.title}] ${c.claim}`;
+      // Strip angle brackets from title and claim — framing-tag integrity (untrusted LLM-extracted text)
+      const safeTitle = upload.title.replace(/[<>]/g, '');
+      const safeClaim = c.claim.replace(/[<>]/g, '');
+      const line = `[${safeTitle}] ${safeClaim}`;
       if (charCount + line.length > MAX_LEARNER_CONTEXT_CHARS) break;
       lines.push(line);
       charCount += line.length + 1;

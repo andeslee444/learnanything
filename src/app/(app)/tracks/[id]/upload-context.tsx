@@ -50,7 +50,7 @@ export function UploadContext({ trackId }: Props) {
         const reader = new FileReader();
         reader.onload = (e) => resolve(e.target?.result as string);
         reader.onerror = reject;
-        reader.readAsText(file);
+        reader.readAsText(file, 'utf-8');
       });
     } catch {
       setUploadState({ kind: 'error', message: 'Could not read the file — please try again' });
