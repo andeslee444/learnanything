@@ -90,6 +90,22 @@ export const fakeOutputs: Record<LlmPurpose, unknown> = {
       { term: 'variable', definition: 'A named container for a value.' },
     ],
   },
+  // Phase 6 — extract-claims: two factual claims from the fixture article block
+  // ("Variables: names for values" block in generate-lesson fixture).
+  'extract-claims': {
+    claims: [
+      { claim: 'A variable stores a value under a name.' },
+      { claim: 'Variables let the same code work with different values.' },
+    ],
+  },
+
+  // Phase 6 — entail-claim: supported with the python docs url (from dossier fixture)
+  'entail-claim': {
+    verdict: 'supported',
+    sourceUrl: 'https://docs.python.org/3/tutorial/index.html',
+    note: 'The dossier explicitly states variables store values under a name.',
+  },
+
   'create-reference-doc': {
     title: 'Variables and types',
     docType: 'cheat_sheet',
