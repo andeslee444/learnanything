@@ -3,7 +3,20 @@
 AI-generated learning platform: any student types what they want to learn and receives custom multi-modal lessons grounded in fresh, cited web research — built on a mission-driven methodology with a persistent learner model.
 
 - Design spec: `docs/superpowers/specs/2026-06-09-learnanything-v1-design.md`
-- Current phase: 3 (research layer) — see `docs/superpowers/plans/2026-06-10-phase-3-research-layer.md`
+- Current phase: 8 (TTS narration, text uploads, notifications) — see `docs/superpowers/plans/2026-06-11-phase-8-modality-ingestion.md`
+
+## Founder follow-ups (deploy checklist)
+
+Everything below degrades gracefully when unset — tests and CI never need these.
+
+| Variable | Enables | Without it |
+|---|---|---|
+| `OPENAI_API_KEY` | Live TTS narration (gpt-4o-mini-tts) | Deterministic 1s silent WAV |
+| `RESEND_API_KEY` | Real email delivery via Resend | `[email:log]` console transport |
+| `NOTIFY_FROM` | Custom From address | `LearnAnything <onboarding@resend.dev>` |
+| `CRON_SECRET` | Cron endpoints (review digest, mission report) | Endpoints 401 (fail closed) |
+
+Set `CRON_SECRET` in Vercel env — `vercel.json` schedules the two cron routes; Vercel sends it as the bearer token automatically. Phase 9 launch-checklist note: signup currently has no email-verification flow, so digests go to unverified addresses — add verification before scaling sends (sender-reputation risk).
 
 ## Setup
 

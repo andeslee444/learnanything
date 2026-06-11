@@ -13,6 +13,7 @@ import { WorkedExample } from '@/components/lesson/worked-example';
 import { AnimatedDiagram } from '@/components/lesson/animated-diagram';
 import { WinCheck } from '@/components/lesson/win-check';
 import { TutorPanel } from '@/components/lesson/tutor-panel';
+import { ListenButton } from '@/components/lesson/listen-button';
 
 type LessonContent = {
   openerItems: QuizItem[];
@@ -203,6 +204,9 @@ function LessonReady({ lessonId, trackId, data }: LessonReadyProps) {
           <span className="font-medium">Goal:</span> {data.spec.objective}
         </p>
       )}
+
+      {/* Listen button — TTS narration (Phase 8) */}
+      <ListenButton lessonId={lessonId} />
 
       {/* Opener: quick recall from glossary */}
       {openerItems.length > 0 && !openerComplete && (

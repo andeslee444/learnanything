@@ -8,3 +8,4 @@ export * from './reviews';
 export * from './research';
 export * from './billing';
 export * from './verification';
+export * from './narrations';
