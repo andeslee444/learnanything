@@ -3,14 +3,18 @@ import type { LlmPurpose } from './ai';
 /**
  * Sanitize-block fixture function (dynamic per prompt, spec §7).
  * - article blocks → action 'rewrite' with fixed generic text + original citations preserved.
+ * - quiz blocks (including winCheck items passed as {type:'quiz', items:[...]}) → action 'keep'.
  * - all other block types → action 'keep'.
  *
  * The prompt contains the block JSON after "<block>" so we parse it out via a simple regex.
  * This is a fixture only; the regex is intentionally simple — it just needs to detect the
  * block "type" field to decide rewrite vs keep.
+ *
+ * winCheck is passed as a quiz-shaped block — the fixture returns 'keep' for it, which is
+ * the correct behavior: winCheck items are generic assessment items with no learner-derived text.
  */
 function sanitizeBlockFixture(prompt: string): unknown {
-  // Extract the block JSON section from the prompt (between <block> tags).
+  // Extract the block JSON section from the prompt (between [/tag]-neutralized <block> tags).
   const match = prompt.match(/<block>([\s\S]*?)<\/block>/);
   if (match) {
     try {
@@ -29,6 +33,7 @@ function sanitizeBlockFixture(prompt: string): unknown {
           reason: 'Article block rewritten to remove any personalisation; citations preserved.',
         };
       }
+      // quiz, flashcard_deck, worked_example, glossary_callout, animated_diagram → keep
     } catch {
       // Malformed JSON in prompt — fall through to 'keep'
     }
