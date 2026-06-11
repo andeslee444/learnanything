@@ -4,6 +4,9 @@
  * both inline and in tests.
  */
 
+import { eq, sql } from 'drizzle-orm';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as s from '@/db/schema';
 import { alertFounder } from '@/lib/alerts';
 
 /** Score below this threshold triggers a founder-alert console.warn. */
@@ -76,4 +79,71 @@ export function maybeAlertFaithfulness(lessonId: string, score: number): void {
   if (score < ALERT_THRESHOLD) {
     alertFounder('faithfulness', { lessonId, score });
   }
+}
+
+// ── Faithfulness-regression auto-unpublish ────────────────────────────────────
+
+type Db = NodePgDatabase<typeof s>;
+
+/**
+ * Auto-unpublish a shared lesson when the verify pipeline writes a terminal low
+ * faithfulness result (score < ALERT_THRESHOLD or verificationStatus 'issues').
+ *
+ * UNLIKE anonymous reports (which are ALERT-ONLY, de-weaponized in T3), this
+ * trigger is INTERNAL/TRUSTED — our own verifier produces it — so the auto-flip
+ * from 'approved' → 'pending' is safe here.
+ *
+ * Rules:
+ * - 'approved' row + low score/issues → set 'pending' + alertFounder('report', {slug, note}).
+ * - 'removed' rows stay removed (sticky — admin-controlled, not owner-deletable).
+ * - 'pending' stays pending (idempotent — no second alert when already pending).
+ * - No shared row → no-op.
+ * - The alert payload is CONTENT-FREE: only {slug, lessonId, note}.
+ *
+ * Called from the verify workflow's finalize step after writing faithfulnessScore
+ * and verificationStatus to the lessons row.
+ */
+export async function maybeUnpublishSharedOnRegression(
+  db: Db,
+  lessonId: string,
+  score: number,
+  verificationStatus: 'verified' | 'issues',
+): Promise<void> {
+  // Only act when the score is below threshold OR status is 'issues'.
+  if (score >= ALERT_THRESHOLD && verificationStatus !== 'issues') {
+    return;
+  }
+
+  const [row] = await db
+    .select({ slug: s.sharedLessons.slug, moderationStatus: s.sharedLessons.moderationStatus })
+    .from(s.sharedLessons)
+    .where(eq(s.sharedLessons.lessonId, lessonId));
+
+  if (!row) {
+    // No shared row — nothing to unpublish.
+    return;
+  }
+
+  if (row.moderationStatus === 'removed') {
+    // Admin-controlled row — sticky, leave it alone.
+    return;
+  }
+
+  if (row.moderationStatus === 'pending') {
+    // Already pending — idempotent, no second alert.
+    return;
+  }
+
+  // 'approved' → flip to 'pending' and alert.
+  await db
+    .update(s.sharedLessons)
+    .set({ moderationStatus: 'pending' })
+    .where(
+      sql`${s.sharedLessons.lessonId} = ${lessonId}
+        AND ${s.sharedLessons.moderationStatus} = 'approved'`,
+    );
+
+  // Content-free alert: only structural identifiers (slug, lessonId).
+  // UNLIKE anonymous reports, this is trusted/internal — the auto-flip is safe here.
+  alertFounder('report', { slug: row.slug, lessonId, note: 'faithfulness_regression' });
 }

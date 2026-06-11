@@ -108,14 +108,24 @@ export default function TermsPage() {
       <section className="mt-8">
         <h2 className="text-lg font-semibold text-ink-900">Copyright / DMCA</h2>
         <p className="mt-2 text-sm text-ink-700">
-          We respect intellectual property rights. If you believe content on the platform infringes
-          your copyright, please contact us at{' '}
-          <span className="font-medium">{contactEmail}</span>. We maintain a repeat-infringer
-          policy and will disable accounts of users who repeatedly infringe third-party rights. A
-          full DMCA takedown procedure will be published in a future update.
+          We respect intellectual property rights. If you believe that content shared on LearnAnything
+          infringes your copyright, you may submit a DMCA takedown notice to us at{' '}
+          <span className="font-medium">{contactEmail}</span>. Your notice must include: (1) identification
+          of the copyrighted work claimed to be infringed; (2) the specific URL(s) of the allegedly
+          infringing material; (3) your contact information; (4) a good-faith statement that the use
+          is not authorised; and (5) a statement under penalty of perjury that the information is
+          accurate and that you are authorised to act on behalf of the copyright owner, together with
+          your signature. Incomplete notices cannot be processed. The full notice procedure, counter-notice
+          process (10–14 business-day window per 17 U.S.C. § 512(g)), and repeat-infringer policy
+          are described in detail in our internal takedown procedure — the complete process is
+          available on request at <span className="font-medium">{contactEmail}</span>.
         </p>
-        <p className="mt-2 text-sm text-ink-400 italic">
-          Full DMCA takedown process: to be completed in Phase 10.
+        <p className="mt-2 text-sm text-ink-700">
+          <strong>Repeat-infringer policy:</strong> In accordance with 17 U.S.C. § 512(i), we maintain
+          a policy of terminating, in appropriate circumstances, accounts of users who are repeat
+          infringers of third-party intellectual property rights. Users who receive multiple valid
+          DMCA notices may have their sharing privileges suspended and, ultimately, their accounts
+          terminated.
         </p>
       </section>
 

@@ -34,7 +34,7 @@ import { eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as s from '@/db/schema';
 import { sanitizeLessonContent, SanitizeError } from './sanitize';
-import { badgeFor } from './verdicts';
+import { badgeFor, ALERT_THRESHOLD } from './verdicts';
 
 export type { SanitizeError };
 
@@ -185,14 +185,102 @@ export function createShareHandlers(db: Db) {
         slug: s.sharedLessons.slug,
         vertical: s.sharedLessons.vertical,
         moderationStatus: s.sharedLessons.moderationStatus,
+        badgeSnapshot: s.sharedLessons.badgeSnapshot,
       })
       .from(s.sharedLessons)
       .where(eq(s.sharedLessons.lessonId, lesson.id));
 
     if (existing) {
-      // Return existing row regardless of moderationStatus — do NOT modify the row.
-      // Admin-controlled rows (moderationStatus 'removed') are not re-approved here.
       const vert = existing.vertical || track.vertical;
+
+      // ── 'removed' rows: sticky — admin-controlled, never re-approved by owner.
+      // ── 'approved' rows: returned untouched (no silent content churn, no LLM spend).
+      //    Exception: cheap badge refresh when the snapshot has checkedAt=null and
+      //    the source now has verification rows (carried from T2 review note).
+      // ── 'pending' rows (corrections-propagation path):
+      //    When the source lesson's CURRENT verification is healthy
+      //    (faithfulnessScore >= ALERT_THRESHOLD AND verificationStatus !== 'issues'),
+      //    the owner's re-share re-runs sanitize + updates the row with fresh sanitized
+      //    content + fresh badgeSnapshot + moderationStatus 'approved'.
+      //    This is how the founder/regression-unpublished lesson gets republished after
+      //    the owner fixes the lesson (e.g. P6 regenerate or admin retry).
+      //    An UNHEALTHY source must NOT be re-publishable by the owner.
+
+      if (existing.moderationStatus === 'removed' || existing.moderationStatus === 'approved') {
+        // Cheap badge refresh: if snapshot has checkedAt=null but source now has verification rows,
+        // refresh badgeSnapshot without re-sanitizing (no LLM spend).
+        const currentSnapshot = existing.badgeSnapshot as BadgeSnapshot | null;
+        if (existing.moderationStatus === 'approved' && (currentSnapshot?.checkedAt === null || currentSnapshot?.checkedAt === undefined)) {
+          const verRows = await db
+            .select({ id: s.verificationResults.lessonId })
+            .from(s.verificationResults)
+            .where(eq(s.verificationResults.lessonId, lesson.id))
+            .limit(1);
+          if (verRows.length > 0) {
+            // Source now has verification rows — refresh snapshot cheaply (no re-sanitize).
+            const freshSnapshot = await buildBadgeSnapshot(db, lesson);
+            await db
+              .update(s.sharedLessons)
+              .set({ badgeSnapshot: freshSnapshot as Record<string, unknown> })
+              .where(eq(s.sharedLessons.lessonId, lesson.id));
+          }
+        }
+
+        return {
+          slug: existing.slug,
+          url: `/learn/${vert}/${existing.slug}`,
+          vertical: vert,
+          alreadyExisted: true,
+        };
+      }
+
+      // existing.moderationStatus === 'pending' — corrections-propagation path.
+      // Check if the source lesson's CURRENT verification is healthy.
+      const isHealthy =
+        (lesson.faithfulnessScore !== null &&
+          lesson.faithfulnessScore !== undefined &&
+          lesson.faithfulnessScore >= ALERT_THRESHOLD) &&
+        lesson.verificationStatus !== 'issues';
+
+      if (!isHealthy) {
+        // Source is still unhealthy — do NOT re-publish bad content.
+        // Return the existing pending row; the owner must fix the lesson first.
+        return {
+          slug: existing.slug,
+          url: `/learn/${vert}/${existing.slug}`,
+          vertical: vert,
+          alreadyExisted: true,
+        };
+      }
+
+      // Source is now healthy — re-sanitize and republish.
+      // This is the corrections-propagation path: founder/regression unpublished it,
+      // owner fixed the lesson, re-share republishes with fresh content + badges.
+      let reSanitizeResult: Awaited<ReturnType<typeof sanitizeLessonContent>>;
+      try {
+        reSanitizeResult = await sanitizeLessonContent(db, lesson);
+      } catch (err) {
+        if (err instanceof SanitizeError) {
+          if (err.retryable) {
+            return { kind: 'sanitize_unavailable', retryable: true };
+          }
+          return { kind: 'cannot_share', reason: err.message };
+        }
+        throw err;
+      }
+
+      const freshBadgeSnapshot = await buildBadgeSnapshot(db, lesson);
+
+      await db
+        .update(s.sharedLessons)
+        .set({
+          sanitizedContent: reSanitizeResult.content as Record<string, unknown>,
+          badgeSnapshot: freshBadgeSnapshot as Record<string, unknown>,
+          moderationStatus: 'approved',
+          verificationStatus: lesson.verificationStatus,
+        })
+        .where(eq(s.sharedLessons.lessonId, lesson.id));
+
       return {
         slug: existing.slug,
         url: `/learn/${vert}/${existing.slug}`,

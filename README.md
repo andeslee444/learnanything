@@ -3,7 +3,7 @@
 AI-generated learning platform: any student types what they want to learn and receives custom multi-modal lessons grounded in fresh, cited web research — built on a mission-driven methodology with a persistent learner model.
 
 - Design spec: `docs/superpowers/specs/2026-06-09-learnanything-v1-design.md`
-- Current phase: 9 (Stripe billing, legal pages, export/delete, 36-case evals) — see `docs/superpowers/plans/2026-06-11-phase-9-monetization-launch.md`
+- Current phase: 10 (public sharing, corrections propagation, DMCA takedown docs)
 
 ## Founder follow-ups (deploy checklist)
 
@@ -19,9 +19,11 @@ Everything below degrades gracefully when unset — tests and CI never need thes
 | `STRIPE_WEBHOOK_SECRET` | Webhook signature verification | Webhook 503 (fail closed) |
 | `STRIPE_PRICE_ID` | The $15/mo subscription price | Checkout 503 |
 | `APP_URL` | Checkout/portal redirect URLs | `http://localhost:3000` |
-| `CONTACT_EMAIL` | Contact address on /privacy + /terms | Generic fallback text |
+| `CONTACT_EMAIL` | Contact address on /privacy + /terms + legal DMCA contact | Generic fallback text — **required in prod before first public share** |
 
 Stripe setup (one-time, in the Stripe dashboard): create a recurring $15/mo Price and put its id in `STRIPE_PRICE_ID`; add a webhook endpoint pointing at `/api/billing/webhook` subscribed to `checkout.session.completed`, `invoice.paid`, `customer.subscription.deleted`, and copy its signing secret into `STRIPE_WEBHOOK_SECRET`. Subscription grants 30 credits/month (`SUBSCRIPTION_MONTHLY_CREDITS` in `src/lib/stripe.ts` — retune freely).
+
+**DMCA agent registration (required before first public share):** Register a DMCA Designated Agent with the US Copyright Office at <https://www.copyright.gov/dmca-directory/> ($6 fee, renew every 3 years). Set `CONTACT_EMAIL` to the registered agent's contact address. Safe-harbour protection under 17 U.S.C. § 512 requires this registration to be active before users can share public lessons. See `docs/takedown-process.md` for the full notice/counter-notice procedure and repeat-infringer policy.
 
 Other launch items: **/privacy and /terms are templates pending legal review — have counsel review before public launch.** Set `CRON_SECRET` in Vercel env — `vercel.json` schedules the two cron routes. Signup has no email-verification flow, so digests go to unverified addresses — add verification before scaling sends (sender-reputation risk).
 
