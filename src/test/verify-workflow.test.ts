@@ -14,7 +14,7 @@ import { eq, sql } from 'drizzle-orm';
 import { testDb, testPool, resetDb } from '@/test/db';
 import * as s from '@/db/schema';
 import { verifyBlock, regenerateBlock } from '@/server/lessons/verify';
-import { faithfulnessScore, ALERT_THRESHOLD } from '@/server/lessons/verdicts';
+import { computeFinalize, maybeAlertFaithfulness } from '@/server/lessons/verdicts';
 import { createSequentialMockLanguageModel } from '@/test/mock-llm-helper';
 
 // ── Seed helpers ──────────────────────────────────────────────────────────────
@@ -249,15 +249,13 @@ describe('finalize — faithfulness score + console.warn alert seam', () => {
       { lessonId: lesson.id, blockId: 'block-0', status: 'verified', claimsTotal: 2, claimsVerified: 2, details: [] },
     ]).onConflictDoNothing();
 
-    // Simulate finalize logic directly (in workflow it's a step)
+    // Simulate finalize logic via shared computeFinalize helper (kills inline copy)
     const rows = await testDb
       .select({ claimsVerified: s.verificationResults.claimsVerified, claimsTotal: s.verificationResults.claimsTotal, status: s.verificationResults.status })
       .from(s.verificationResults)
       .where(eq(s.verificationResults.lessonId, lesson.id));
 
-    const score = faithfulnessScore(rows);
-    const allVerified = rows.every((r) => r.status === 'verified' || r.status === 'regenerated');
-    const verificationStatus: 'verified' | 'issues' = allVerified ? 'verified' : 'issues';
+    const { score, verificationStatus } = computeFinalize(rows);
 
     await testDb.update(s.lessons).set({ faithfulnessScore: score, verificationStatus }).where(eq(s.lessons.id, lesson.id));
 
@@ -266,13 +264,11 @@ describe('finalize — faithfulness score + console.warn alert seam', () => {
     expect(updated.verificationStatus).toBe('verified');
   });
 
-  it('fires console.warn under ALERT_THRESHOLD (founder-alert seam)', () => {
+  it('fires console.warn under ALERT_THRESHOLD (founder-alert seam via maybeAlertFaithfulness)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      const score = 0.6; // below 0.8
-      if (score < ALERT_THRESHOLD) {
-        console.warn('[founder-alert] faithfulness', { lessonId: 'test-lesson', score });
-      }
+      // Spy the real function — not an inline if-console.warn copy.
+      maybeAlertFaithfulness('test-lesson', 0.6);
       expect(warnSpy).toHaveBeenCalledWith(
         '[founder-alert] faithfulness',
         expect.objectContaining({ score: 0.6 }),
@@ -285,10 +281,7 @@ describe('finalize — faithfulness score + console.warn alert seam', () => {
   it('does NOT fire console.warn above ALERT_THRESHOLD', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      const score = 0.9; // above 0.8
-      if (score < ALERT_THRESHOLD) {
-        console.warn('[founder-alert] faithfulness', { lessonId: 'test-lesson', score });
-      }
+      maybeAlertFaithfulness('test-lesson', 0.9);
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
@@ -312,10 +305,7 @@ describe('finalize — faithfulness score + console.warn alert seam', () => {
       .from(s.verificationResults)
       .where(eq(s.verificationResults.lessonId, lesson.id));
 
-    const allVerified = rows.every((r) => r.status === 'verified' || r.status === 'regenerated');
-    expect(allVerified).toBe(false);
-
-    const verificationStatus = allVerified ? 'verified' : 'issues';
+    const { verificationStatus } = computeFinalize(rows);
     expect(verificationStatus).toBe('issues');
   });
 });
@@ -434,10 +424,40 @@ describe('regenerateBlock — sequential mock path', () => {
       );
     expect(row?.status).toBe('unverified');
 
+    // Fix #1: Original counts must be preserved (not 0/0/[]) so faithfulnessScore reflects the failure.
+    // The initial verify had 1 claim, 0 supported → claimsTotal=1, claimsVerified=0.
+    expect(row?.claimsTotal).toBe(1);
+    expect(row?.claimsVerified).toBe(0);
+    expect(Array.isArray(row?.details)).toBe(true);
+    expect((row?.details as unknown[]).length).toBeGreaterThan(0);
+
     // Original content must be kept (no swap on still-failing)
     const [lessonAfter] = await testDb.select().from(s.lessons).where(eq(s.lessons.id, lesson.id));
     const content = lessonAfter.content as { blocks: Array<{ markdown: string }> };
     expect(content.blocks[0].markdown).toBe(originalMarkdown);
+
+    // Finalize: score should be <1 (0/1 = 0.0) and alert should fire via maybeAlertFaithfulness.
+    const verifyRows = await testDb
+      .select({ claimsVerified: s.verificationResults.claimsVerified, claimsTotal: s.verificationResults.claimsTotal, status: s.verificationResults.status })
+      .from(s.verificationResults)
+      .where(eq(s.verificationResults.lessonId, lesson.id));
+
+    const { score, verificationStatus, shouldAlert } = computeFinalize(verifyRows);
+    expect(score).toBeLessThan(1);
+    expect(verificationStatus).toBe('issues');
+    expect(shouldAlert).toBe(true);
+
+    // Spy on the real maybeAlertFaithfulness path (not an inline console.warn copy).
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      maybeAlertFaithfulness(lesson.id, score);
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[founder-alert] faithfulness',
+        expect.objectContaining({ lessonId: lesson.id, score }),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 
@@ -516,7 +536,7 @@ describe('verify workflow — seed → verify → finalize sequence', () => {
     await verifyBlock(testDb, { lessonId: lesson.id, blockIndex: 0 });
     await verifyBlock(testDb, { lessonId: lesson.id, blockIndex: 2 });
 
-    // Finalize step
+    // Finalize step via shared computeFinalize helper (kills inline copy)
     const rows = await testDb
       .select({ claimsVerified: s.verificationResults.claimsVerified, claimsTotal: s.verificationResults.claimsTotal, status: s.verificationResults.status })
       .from(s.verificationResults)
@@ -524,9 +544,7 @@ describe('verify workflow — seed → verify → finalize sequence', () => {
 
     expect(rows.length).toBeGreaterThanOrEqual(2);
 
-    const score = faithfulnessScore(rows);
-    const allVerified = rows.every((r) => r.status === 'verified' || r.status === 'regenerated');
-    const verificationStatus: 'verified' | 'issues' = allVerified ? 'verified' : 'issues';
+    const { score, verificationStatus } = computeFinalize(rows);
 
     await testDb
       .update(s.lessons)
@@ -539,11 +557,6 @@ describe('verify workflow — seed → verify → finalize sequence', () => {
     expect(['verified', 'issues']).toContain(updated.verificationStatus);
 
     // Non-article block (index 1) must have no row
-    const rowBlockIds = rows.map((r) => r).filter((r) => {
-      // We need to get blockId — use a separate query
-      return true;
-    });
-    // Verify that 'block-1' is not present
     const allRows = await testDb.select().from(s.verificationResults).where(eq(s.verificationResults.lessonId, lesson.id));
     const blockIds = allRows.map((r) => r.blockId);
     expect(blockIds).not.toContain('block-1');

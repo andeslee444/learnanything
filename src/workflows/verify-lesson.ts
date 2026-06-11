@@ -13,11 +13,11 @@
  * Errors are logged but do not propagate to the HTTP response.
  */
 
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import * as s from '@/db/schema';
 import { verifyBlock } from '@/server/lessons/verify';
-import { faithfulnessScore, ALERT_THRESHOLD } from '@/server/lessons/verdicts';
+import { pickArticleIndexes, computeFinalize, maybeAlertFaithfulness } from '@/server/lessons/verdicts';
 
 // ── seed step ─────────────────────────────────────────────────────────────────
 
@@ -39,9 +39,7 @@ async function seed(lessonId: string): Promise<{ articleBlockIndexes: number[] }
   } | null;
   if (!content?.blocks) return { articleBlockIndexes: [] };
 
-  const articleIndexes = content.blocks
-    .map((b, i) => (b.type === 'article' ? i : -1))
-    .filter((i) => i !== -1);
+  const articleIndexes = pickArticleIndexes(content.blocks);
 
   if (articleIndexes.length === 0) return { articleBlockIndexes: [] };
 
@@ -91,11 +89,7 @@ async function finalize(lessonId: string): Promise<void> {
 
   if (rows.length === 0) return;
 
-  const score = faithfulnessScore(rows);
-  const allVerified = rows.every(
-    (r) => r.status === 'verified' || r.status === 'regenerated',
-  );
-  const verificationStatus: 'verified' | 'issues' = allVerified ? 'verified' : 'issues';
+  const { score, verificationStatus } = computeFinalize(rows);
 
   await db
     .update(s.lessons)
@@ -106,9 +100,7 @@ async function finalize(lessonId: string): Promise<void> {
     .where(eq(s.lessons.id, lessonId));
 
   // Founder-alert seam: greppable console.warn fires under 0.8 threshold.
-  if (score < ALERT_THRESHOLD) {
-    console.warn('[founder-alert] faithfulness', { lessonId, score });
-  }
+  maybeAlertFaithfulness(lessonId, score);
 }
 
 // ── workflow ──────────────────────────────────────────────────────────────────

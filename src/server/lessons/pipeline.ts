@@ -208,9 +208,18 @@ async function deliver(
   if (holdId) await captureHold(db, holdId).catch((err) => console.error('capture failed', err));
   // Fire-and-forget: start the async verification workflow after capture.
   // The lesson is already usable (status='ready') — verification happens asynchronously.
-  start(verifyLessonWorkflow, [lessonId]).catch((err) =>
-    console.error('verifyLessonWorkflow start failed', err),
-  );
+  start(verifyLessonWorkflow, [lessonId]).catch((err: unknown) => {
+    // WorkflowRuntimeError is expected outside the WDK runtime (e.g. tests, evals).
+    // Log a single quiet line instead of a full error trace in those contexts.
+    const isWdkError =
+      err instanceof Error &&
+      (err.name === 'WorkflowRuntimeError' || err.message.includes('WorkflowRuntimeError'));
+    if (isWdkError) {
+      console.warn('[verify] workflow unavailable outside WDK runtime');
+    } else {
+      console.error('verifyLessonWorkflow start failed', err);
+    }
+  });
   return { status: 'ready' as const };
 }
 

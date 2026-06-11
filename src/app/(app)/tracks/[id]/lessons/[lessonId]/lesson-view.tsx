@@ -181,7 +181,7 @@ function LessonReady({ lessonId, trackId, data }: LessonReadyProps) {
       active = false;
       if (pollTimer !== null) clearInterval(pollTimer);
     };
-  }, [lessonId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lessonId]);
 
   // Show win-check only after opener items (if any) are done.
   const showBlocks = openerItems.length === 0 || openerComplete;

@@ -32,7 +32,7 @@ import { validateLessonContent } from '../src/server/lessons/validate.js';
 import { stripContentAnswerKey } from '../src/app/api/lessons/[lessonId]/route.js';
 import { distillLesson } from '../src/server/lessons/distiller.js';
 import { verifyBlock } from '../src/server/lessons/verify.js';
-import { faithfulnessScore, ALERT_THRESHOLD } from '../src/server/lessons/verdicts.js';
+import { pickArticleIndexes, computeFinalize, maybeAlertFaithfulness } from '../src/server/lessons/verdicts.js';
 
 // ── flags ─────────────────────────────────────────────────────────────────────
 
@@ -351,10 +351,8 @@ async function runCase(db: Db, c: EvalCase): Promise<CaseResult> {
         if (delivered.status === 'ready') {
           const content = contentParse.data;
 
-          // Step 1: Find article block indexes in the delivered lesson
-          const articleBlockIndexes = content.blocks
-            .map((b, i) => (b.type === 'article' ? i : -1))
-            .filter((i) => i !== -1);
+          // Step 1: Find article block indexes using shared pure helper
+          const articleBlockIndexes = pickArticleIndexes(content.blocks);
 
           if (articleBlockIndexes.length > 0) {
             // Step 2: Seed 'checking' rows (ON CONFLICT DO NOTHING — idempotent)
@@ -377,7 +375,7 @@ async function runCase(db: Db, c: EvalCase): Promise<CaseResult> {
               await verifyBlock(db, { lessonId: lesson.id, blockIndex });
             }
 
-            // Step 4: Finalize — compute score and update lesson
+            // Step 4: Finalize — compute score and update lesson using shared helpers
             const verifyRows = await db
               .select({
                 claimsVerified: s.verificationResults.claimsVerified,
@@ -387,23 +385,18 @@ async function runCase(db: Db, c: EvalCase): Promise<CaseResult> {
               .from(s.verificationResults)
               .where(eq(s.verificationResults.lessonId, lesson.id));
 
-            const score = faithfulnessScore(verifyRows);
-            const allVerified = verifyRows.every(
-              (r) => r.status === 'verified' || r.status === 'regenerated',
-            );
-            const verStatus: 'verified' | 'issues' = allVerified ? 'verified' : 'issues';
+            const { score, verificationStatus: verStatus } = computeFinalize(verifyRows);
 
             await db
               .update(s.lessons)
               .set({ faithfulnessScore: score, verificationStatus: verStatus })
               .where(eq(s.lessons.id, lesson.id));
 
-            if (score < ALERT_THRESHOLD) {
-              console.warn('[founder-alert] faithfulness', { lessonId: lesson.id, score });
-            }
+            // Fire founder-alert via the shared function (greppable seam).
+            maybeAlertFaithfulness(lesson.id, score);
 
             // Check 13: lessonVerified — faithfulnessScore >= 0.8 AND verificationStatus 'verified'
-            checks.lessonVerified = score >= ALERT_THRESHOLD && verStatus === 'verified';
+            checks.lessonVerified = score >= 0.8 && verStatus === 'verified';
           } else {
             // No article blocks to verify — vacuously passes (nothing to fail)
             checks.lessonVerified = true;
