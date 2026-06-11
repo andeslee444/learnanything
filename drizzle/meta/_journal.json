@@ -169,6 +169,20 @@
       "when": 1781152058578,
       "tag": "0023_resources-extraction",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1781157325607,
+      "tag": "0024_billing-customers",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1781157325700,
+      "tag": "0025_billing-customers-updated-at-trigger",
+      "breakpoints": true
     }
   ]
 }
