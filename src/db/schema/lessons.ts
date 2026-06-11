@@ -25,6 +25,8 @@ export const lessons = pgTable(
     // Promoted from zpdSnapshot in Phase 5 — stream route reads column ?? snapshot for back-compat.
     workflowRunId: text('workflow_run_id'),
     modelVersion: text('model_version'),
+    // Set by admin dismiss action — dismissed items leave the founder review queue.
+    adminDismissedAt: timestamp('admin_dismissed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
