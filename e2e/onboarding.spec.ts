@@ -213,4 +213,68 @@ test('signup → mission interview → learning map → calibration → lesson j
   // The track page groups by mastery — demonstrated/mastered → 'done' group labeled "Done"
   await expect(page.getByText('Done')).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId('map-node').filter({ hasText: 'Variables and types' })).toBeVisible();
+
+  // ── 12. Library link ──────────────────────────────────────────
+  // The track page renders a 'library-link' when nodes exist.
+  await expect(page.getByTestId('library-link')).toBeVisible({ timeout: 10_000 });
+  await page.getByTestId('library-link').click();
+  await expect(page).toHaveURL(/\/tracks\/[^/]+\/library$/, { timeout: 15_000 });
+
+  // ── 13. Library page assertions ───────────────────────────────
+  // The distiller runs fire-and-forget after win-check pass.
+  // In fake mode it completes in milliseconds but is async relative to the
+  // attempts response, so we navigate here and use generous timeouts.
+  // The library page is data-testid="library".
+  await expect(page.getByTestId('library')).toBeVisible({ timeout: 10_000 });
+
+  // Glossary: 'variable' term promoted by the distiller fixture
+  // Use expect.poll + page.reload to tolerate the async distiller gap.
+  await expect.poll(
+    async () => {
+      const count = await page.getByTestId('glossary-term').count();
+      if (count === 0) await page.reload();
+      return count;
+    },
+    { timeout: 15_000 },
+  ).toBeGreaterThanOrEqual(1);
+  await expect(page.getByTestId('glossary-term').filter({ hasText: 'variable' })).toBeVisible();
+
+  // Reference doc card present
+  await expect(page.getByTestId('reference-doc-card').first()).toBeVisible({ timeout: 15_000 });
+
+  // Learning records timeline non-empty
+  await expect(page.getByTestId('record-item').first()).toBeVisible({ timeout: 10_000 });
+
+  // ── 14. Header reviews-badge ≥ 1 ─────────────────────────────
+  // The header badge appears when due count > 0.
+  // The distiller creates a review card for 'variable' — due immediately (new card).
+  // The layout is server-rendered; after the glossary poll + reload the badge should
+  // be present on the same page (getDueCount runs fresh on each page render).
+  // Use a generous poll+reload in case the first library load was before the distiller
+  // finished creating the review card.
+  await expect.poll(
+    async () => {
+      const badge = await page.getByTestId('reviews-badge').count();
+      if (badge === 0) await page.reload();
+      return badge;
+    },
+    { timeout: 15_000 },
+  ).toBeGreaterThanOrEqual(1);
+
+  // ── 15. /reviews page: answer due card correctly ──────────────
+  await page.getByTestId('reviews-badge').click();
+  await expect(page).toHaveURL(/\/reviews$/, { timeout: 10_000 });
+
+  // Wait for review card to render
+  await expect(page.getByTestId('review-card')).toBeVisible({ timeout: 15_000 });
+
+  // The correct option is the fixture definition: 'A named container for a value.'
+  // Click by exact text content. The button aria-label is "Option N: <text>" but we
+  // click by the option text which is the definition string.
+  await page.getByRole('button', { name: /A named container for a value\./ }).click();
+
+  // ── 16. Reviews done ─────────────────────────────────────────
+  // After answering the last card correctly, the DonePanel appears.
+  // There is a 2-second delay before the panel is shown, so allow 10s.
+  await expect(page.getByTestId('reviews-done')).toBeVisible({ timeout: 10_000 });
 });
