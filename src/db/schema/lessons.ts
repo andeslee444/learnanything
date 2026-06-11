@@ -60,6 +60,8 @@ export const sharedLessons = pgTable('shared_lessons', {
    */
   badgeSnapshot: jsonb('badge_snapshot').notNull().default('{}'),
   publishedAt: timestamp('published_at', { withTimezone: true }),
+  /** Incremented each time POST /api/shared/[slug]/report is called. Auto-unpublishes at 3. */
+  reportCount: integer('report_count').notNull().default(0),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

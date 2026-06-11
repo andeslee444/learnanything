@@ -4,7 +4,7 @@
  * Gate: ADMIN_EMAILS env (comma-separated); session email must be in it → else 404.
  * Non-admin callers receive 404 (don't reveal the route exists).
  */
-import { and, desc, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, isNull, lt, or, sql } from 'drizzle-orm';
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { start } from 'workflow/api';
@@ -77,7 +77,33 @@ export async function GET() {
     .orderBy(desc(s.lessons.createdAt))
     .limit(50);
 
-  return NextResponse.json({ items: rows });
+  // ── Shared lessons queue entries ─────────────────────────────────────────
+  // Rows where report_count >= 1 OR moderationStatus = 'pending'.
+  // Joined to the source lesson's track for the topic display.
+  // Newest 50.
+  const sharedRows = await db
+    .select({
+      id: s.sharedLessons.id,
+      slug: s.sharedLessons.slug,
+      vertical: s.sharedLessons.vertical,
+      moderationStatus: s.sharedLessons.moderationStatus,
+      reportCount: s.sharedLessons.reportCount,
+      createdAt: s.sharedLessons.createdAt,
+      topic: s.tracks.topic,
+    })
+    .from(s.sharedLessons)
+    .innerJoin(s.lessons, eq(s.sharedLessons.lessonId, s.lessons.id))
+    .innerJoin(s.tracks, eq(s.lessons.trackId, s.tracks.id))
+    .where(
+      or(
+        gte(s.sharedLessons.reportCount, 1),
+        eq(s.sharedLessons.moderationStatus, 'pending'),
+      ),
+    )
+    .orderBy(desc(s.sharedLessons.createdAt))
+    .limit(50);
+
+  return NextResponse.json({ items: rows, sharedItems: sharedRows });
 }
 
 // ── POST /api/admin/queue ─────────────────────────────────────────────────────
@@ -86,14 +112,39 @@ export async function POST(req: Request) {
   const denied = await requireAdmin();
   if (denied) return denied;
 
-  let body: { lessonId: string; action: 'retry' | 'dismiss' };
+  let body: { lessonId?: string; sharedLessonId?: string; action: 'retry' | 'dismiss' | 'republish' | 'take_down' };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: 'invalid body' }, { status: 400 });
   }
 
-  const { lessonId, action } = body;
+  const { lessonId, sharedLessonId, action } = body;
+
+  // ── Shared lesson actions ──────────────────────────────────────────────────
+  if (sharedLessonId) {
+    if (action !== 'republish' && action !== 'take_down') {
+      return NextResponse.json({ error: 'invalid body' }, { status: 400 });
+    }
+
+    if (action === 'republish') {
+      // Restore to 'approved' and reset report_count.
+      await db
+        .update(s.sharedLessons)
+        .set({ moderationStatus: 'approved', reportCount: 0 })
+        .where(eq(s.sharedLessons.id, sharedLessonId));
+      return NextResponse.json({ ok: true });
+    }
+
+    // action === 'take_down'
+    await db
+      .update(s.sharedLessons)
+      .set({ moderationStatus: 'removed' })
+      .where(eq(s.sharedLessons.id, sharedLessonId));
+    return NextResponse.json({ ok: true });
+  }
+
+  // ── Lesson actions (existing retry / dismiss) ────────────────────────────
   if (!lessonId || (action !== 'retry' && action !== 'dismiss')) {
     return NextResponse.json({ error: 'invalid body' }, { status: 400 });
   }
