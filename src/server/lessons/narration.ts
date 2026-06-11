@@ -156,42 +156,57 @@ export class TtsSynthesisError extends Error {
  *
  * Returns { buffer, mimeType }.
  */
-export async function synthesizeNarration(script: string): Promise<{ buffer: Buffer; mimeType: string }> {
+export type NarrationMimeType = 'audio/wav' | 'audio/mpeg';
+
+export async function synthesizeNarration(
+  script: string,
+): Promise<{ buffer: Buffer; mimeType: NarrationMimeType }> {
   const isFake = process.env.AI_FAKE_LLM === '1' || !process.env.OPENAI_API_KEY;
   if (isFake) {
     return { buffer: buildSilentWav(), mimeType: 'audio/wav' };
   }
 
   const controller = new AbortController();
+  // The timer guards the whole exchange, including the body download — headers
+  // can arrive long before a multi-MB mp3 finishes streaming.
   const timeout = setTimeout(() => controller.abort(), 60_000);
 
-  let res: Response;
   try {
-    res = await fetch('https://api.openai.com/v1/audio/speech', {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini-tts',
-        voice: 'alloy',
-        input: script,
-      }),
-    });
-  } catch (err) {
+    let res: Response;
+    try {
+      res = await fetch('https://api.openai.com/v1/audio/speech', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini-tts',
+          voice: 'alloy',
+          input: script,
+        }),
+      });
+    } catch (err) {
+      const msg = err instanceof Error && err.name === 'AbortError' ? 'TTS request timed out' : 'TTS request failed';
+      throw new TtsSynthesisError(msg);
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new TtsSynthesisError(`TTS API error: ${res.status} ${body.slice(0, 200)}`, res.status);
+    }
+
+    let arrayBuffer: ArrayBuffer;
+    try {
+      arrayBuffer = await res.arrayBuffer();
+    } catch (err) {
+      const msg =
+        err instanceof Error && err.name === 'AbortError' ? 'TTS response download timed out' : 'TTS download failed';
+      throw new TtsSynthesisError(msg);
+    }
+    return { buffer: Buffer.from(arrayBuffer), mimeType: 'audio/mpeg' };
+  } finally {
     clearTimeout(timeout);
-    const msg = err instanceof Error && err.name === 'AbortError' ? 'TTS request timed out' : 'TTS request failed';
-    throw new TtsSynthesisError(msg);
   }
-  clearTimeout(timeout);
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new TtsSynthesisError(`TTS API error: ${res.status} ${body.slice(0, 200)}`, res.status);
-  }
-
-  const arrayBuffer = await res.arrayBuffer();
-  return { buffer: Buffer.from(arrayBuffer), mimeType: 'audio/mpeg' };
 }
