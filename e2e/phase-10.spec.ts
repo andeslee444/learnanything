@@ -17,15 +17,21 @@
  * Design decisions:
  *   - Single journey; sub-checks share journey state for efficiency.
  *   - Public page first-hit is dynamic (DB read + Turbopack compile).
- *     Use generous timeout (90s) on the first visit.
+ *     Per-test timeout is 240s (test.setTimeout below) to accommodate the full
+ *     journey including public-page cold compile. The goto timeout budget (90s)
+ *     is set on the public-page goto; it must remain inside the per-test ceiling.
  *   - Workers:1 serialises all specs.
  *   - Fake LLM (AI_FAKE_LLM=1) — set in playwright.config.ts.
- *   - /learn/[vertical]/[slug] is dynamic — warn the global-setup about it;
- *     we accept first-hit compile budget with the generous timeout.
+ *   - /learn/[vertical]/[slug] is dynamic — global-setup warms /learn/x/warm-00000000
+ *     so the route segment is pre-compiled before the first real visit.
  */
 
 import { test, expect } from '@playwright/test';
 import { signUpAndOnboard } from './helpers';
+
+// This spec covers the longest e2e journey (onboard → share → public visit → unshare).
+// 240s keeps the per-test budget well above the sum of all sub-step timeouts.
+test.setTimeout(240_000);
 
 test('Phase 10 — share journey: share → public page (badges, make-it-yours, report) → unshare → 404', async ({
   page,

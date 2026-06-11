@@ -42,9 +42,11 @@ import {
   buildSlug,
   createShareHandlers,
   _clearShareDebounce,
+  _clearShareDailyCap,
   type BadgeSnapshot,
 } from '@/server/lessons/share';
 import * as sanitizeModule from '@/server/lessons/sanitize';
+import * as alertsModule from '@/lib/alerts';
 
 // ── Pool lifecycle ─────────────────────────────────────────────────────────────
 
@@ -55,7 +57,8 @@ beforeAll(async () => {
 afterAll(() => testPool.end());
 afterEach(() => {
   vi.restoreAllMocks();
-  _clearShareDebounce(); // clear debounce state between tests
+  _clearShareDebounce();  // clear debounce state between tests
+  _clearShareDailyCap();  // clear daily cap between tests
 });
 
 // ── Seed helpers ───────────────────────────────────────────────────────────────
@@ -1002,5 +1005,148 @@ describe('sticky moderation — takedown laundering guard', () => {
     expect(row.moderationStatus).toBe('removed');
 
     vi.resetModules();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// I11. Identity-slug guard: learner name in topic → slug degrades to lesson-{shortid}
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('identity-slug guard — learner name in topic degrades to lesson-<shortid>', () => {
+  it('topic containing the displayName token → share succeeds with lesson-xxxxxxxx slug shape, name absent', async () => {
+    await testDb.insert(s.trustDomains).values([
+      { vertical: 'programming', domain: 'developer.mozilla.org', tier: 'tier1', note: 'test' },
+      { vertical: 'programming', domain: 'docs.python.org', tier: 'tier1', note: 'test' },
+    ]).onConflictDoNothing();
+
+    // Learner name 'Emma Chen' → tokens ['emma', 'chen'] (each ≥4 chars)
+    const [u] = await testDb
+      .insert(s.user)
+      .values({ id: crypto.randomUUID(), name: 'Emma Chen', email: `${crypto.randomUUID()}@id-slug.test` })
+      .returning();
+    const [learner] = await testDb
+      .insert(s.learners)
+      .values({ userId: u.id, displayName: 'Emma Chen', ageBand: '18_plus' })
+      .returning();
+    // Topic contains the name token
+    const [track] = await testDb
+      .insert(s.tracks)
+      .values({ learnerId: learner.id, topic: 'Chess for my daughter Emma Chen', vertical: 'programming', expertiseBand: 'novice' })
+      .returning();
+    await testDb.insert(s.missions).values({
+      trackId: track.id,
+      whyText: 'learn chess',
+      successCriteria: [{ description: 'understand opening moves' }],
+      constraints: {},
+      outOfScope: [],
+    });
+
+    const dossier = await seedDossier('programming', 'Chess for my daughter Emma Chen');
+    const lesson = await seedReadyLesson(track.id, dossier.id, 50);
+
+    const { shareLesson } = createShareHandlers(testDb);
+    const result = await shareLesson(lesson, track);
+
+    expect('slug' in result).toBe(true);
+    if (!('slug' in result)) return;
+
+    // Must match lesson-<8hexchars> shape
+    expect(result.slug).toMatch(/^lesson-[a-z0-9]{8}$/);
+    // Neither name token should appear in the slug
+    expect(result.slug).not.toContain('emma');
+    expect(result.slug).not.toContain('chen');
+    // Share still succeeded (not blocked)
+    expect(result.alreadyExisted).toBe(false);
+  });
+
+  it('clean topic without name tokens → normal slug shape', async () => {
+    await testDb.insert(s.trustDomains).values([
+      { vertical: 'programming', domain: 'developer.mozilla.org', tier: 'tier1', note: 'test' },
+      { vertical: 'programming', domain: 'docs.python.org', tier: 'tier1', note: 'test' },
+    ]).onConflictDoNothing();
+
+    const dossier = await seedDossier('programming', 'Clean topic slug');
+    const world = await seedWorld('clean-slug');
+    const lesson = await seedReadyLesson(world.track.id, dossier.id, 51);
+
+    const { shareLesson } = createShareHandlers(testDb);
+    const result = await shareLesson(lesson, world.track);
+
+    expect('slug' in result).toBe(true);
+    if (!('slug' in result)) return;
+    // Normal slug format includes the topic-slug part
+    expect(result.slug).toMatch(/^[a-z0-9][a-z0-9-]*-[a-z0-9]{8}$/);
+    expect(result.slug).not.toMatch(/^lesson-[a-z0-9]{8}$/);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// I12. Daily sanitize cap: 20 new sanitize runs → 21st returns share_limit + alert
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('daily sanitize cap — 20 runs then share_limit', () => {
+  it('21st new-share attempt returns share_limit; alertFounder fired exactly once', async () => {
+    await testDb.insert(s.trustDomains).values([
+      { vertical: 'programming', domain: 'developer.mozilla.org', tier: 'tier1', note: 'test' },
+      { vertical: 'programming', domain: 'docs.python.org', tier: 'tier1', note: 'test' },
+    ]).onConflictDoNothing();
+
+    // Mock sanitizeLessonContent to be cheap (no real LLM calls needed)
+    const fakeSanitizeResult = {
+      content: { blocks: [], winCheck: { items: [
+        { id: 'wc1', question: 'Q?', options: ['A', 'B', 'C', 'D'], correctIndex: 0, explanation: 'A' },
+        { id: 'wc2', question: 'Q2?', options: ['A', 'B', 'C', 'D'], correctIndex: 0, explanation: 'A' },
+      ] } },
+      dropped: [],
+      rewritten: [],
+    };
+    vi.spyOn(sanitizeModule, 'sanitizeLessonContent').mockResolvedValue(fakeSanitizeResult);
+
+    // Spy on alertFounder to count share_limit_hit calls.
+    // alertsModule is imported at the top of the test file so vitest can intercept it.
+    const alertsSpy = vi.spyOn(alertsModule, 'alertFounder').mockImplementation(() => {});
+
+    const world = await seedWorld('daily-cap');
+    const { shareLesson } = createShareHandlers(testDb);
+
+    const dossier = await seedDossier('programming', 'Daily cap topic');
+    let lastKind: string | undefined;
+    for (let i = 0; i < 21; i++) {
+      // Create a unique lesson for each attempt (no idempotent hits)
+      const [lesson] = await testDb
+        .insert(s.lessons)
+        .values({
+          trackId: world.track.id,
+          seq: 100 + i,
+          spec: { objective: 'Cap test', format: 'article', estimatedMinutes: 5, blockOutline: [] },
+          content: { blocks: [], winCheck: { items: [
+            { id: 'wc1', question: 'Q?', options: ['A', 'B', 'C', 'D'], correctIndex: 0, explanation: 'A' },
+            { id: 'wc2', question: 'Q2?', options: ['A', 'B', 'C', 'D'], correctIndex: 0, explanation: 'A' },
+          ] } },
+          citations: [],
+          zpdSnapshot: { dossierId: dossier.id },
+          status: 'ready',
+          verificationStatus: 'pending',
+        })
+        .returning();
+
+      // Clear debounce between attempts so each is treated as a new share
+      _clearShareDebounce(world.track.learnerId);
+      const result = await shareLesson(lesson, world.track);
+      if ('kind' in result) {
+        lastKind = result.kind;
+      }
+    }
+
+    // The 21st attempt (after cap exhausted) should return share_limit
+    expect(lastKind).toBe('share_limit');
+
+    // alertFounder should have been called exactly once for share_limit_hit
+    const shareLimitCalls = alertsSpy.mock.calls.filter(
+      ([kind, payload]) => kind === 'report' && (payload as Record<string, unknown>).note === 'share_limit_hit',
+    );
+    expect(shareLimitCalls.length).toBe(1);
+
+    vi.restoreAllMocks();
   });
 });

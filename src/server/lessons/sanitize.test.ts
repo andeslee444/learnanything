@@ -71,20 +71,28 @@ function makeMockDb(opts: {
     return chain as unknown as ReturnType<MockDb['select']>;
   };
 
+  // Query order after extracting loadLeakNeedles:
+  //  1. topicDossiers (sanitizeLessonContent)
+  //  2. tracks join learners → { displayName, learnerId } (loadLeakNeedles)
+  //  3. learners (userId lookup) (loadLeakNeedles)
+  //  4. user (email lookup) (loadLeakNeedles)
+  //  5. missions (loadLeakNeedles)
+  //  6. learningRecords (loadLeakNeedles)
+  //  7+ resources/uploads (loadLeakNeedles)
   const db = {
     select: vi.fn().mockImplementation(() => {
       queryDepth++;
       if (queryDepth === 1) {
-        // tracks join learners → trackRow
-        return makeChain(() =>
-          opts.trackRow
-            ? [{ ageBand: opts.trackRow.ageBand, displayName: opts.trackRow.displayName, learnerId: opts.trackRow.learnerId ?? 'learner-id' }]
-            : [],
-        );
-      }
-      if (queryDepth === 2) {
         // topicDossiers → dossierRow
         return makeChain(() => (opts.dossierRow ? [opts.dossierRow] : []));
+      }
+      if (queryDepth === 2) {
+        // tracks join learners → trackRow (loadLeakNeedles)
+        return makeChain(() =>
+          opts.trackRow
+            ? [{ displayName: opts.trackRow.displayName, learnerId: opts.trackRow.learnerId ?? 'learner-id' }]
+            : [],
+        );
       }
       if (queryDepth === 3) {
         // learners (userId lookup)

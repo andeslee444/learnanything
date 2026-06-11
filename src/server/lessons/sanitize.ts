@@ -52,7 +52,7 @@ type Db = NodePgDatabase<typeof s>;
 // Zod v4 note: z.optional on a discriminated union is straightforward — we wrap the
 // union in z.optional() so the field is absent for 'keep'/'drop' responses.
 
-export const sanitizeBlockOutputSchema = z.object({
+const sanitizeBlockOutputSchema = z.object({
   action: z.enum(['keep', 'rewrite', 'drop']),
   block: lessonBlockSchema.optional(),
   reason: z.string().max(200),
@@ -356,42 +356,25 @@ async function sanitizeBlock(
   });
 }
 
-// ── sanitizeLessonContent ─────────────────────────────────────────────────────
+// ── loadLeakNeedles ───────────────────────────────────────────────────────────
 
 /**
- * Result of sanitizing a lesson for public sharing.
+ * Load all learner-private identity needles for a lesson's track.
  *
- * @remarks Sanitized content still contains answer keys (correctIndex/explanations).
- * The public read path (P10-T3) MUST apply the P4b answer-key strip before serialization.
+ * Exported so callers outside sanitizeLessonContent (e.g. shareLesson's slug guard)
+ * can reuse the same needle set without duplicating DB queries.
+ * sanitizeLessonContent uses this helper internally — no behavior change.
+ *
+ * Queries: track → learner (displayName), learner → user (email local-part),
+ * mission (whyText, successCriteria), active learning records (title+body),
+ * user_upload resource titles. All keyed by trackId.
  */
-export type SanitizeResult = {
-  content: Omit<LessonContent, 'openerItems'>;
-  dropped: string[];   // block type identifiers for dropped blocks
-  rewritten: string[]; // block type identifiers for rewritten blocks
-};
-
-/**
- * Sanitize a lesson's content for public sharing (spec §7).
- *
- * @param db - Drizzle database connection for loading lesson + dossier + learner.
- * @param lesson - The lesson DB row (must have status='ready' and a dossierId in zpdSnapshot).
- * @param opts.modelOverride - Model override for testing (threads through to llmObject).
- *
- * @throws SanitizeError (retryable=false) when learner data detected in final content.
- * @throws SanitizeError (retryable=false) when moderation flags content.
- * @throws SanitizeError (retryable=true) when moderation service is unavailable.
- * @throws SanitizeError (retryable=false) when validateLessonContent fails.
- * @throws SanitizeError (retryable=false) when winCheck is dropped by LLM scan.
- */
-export async function sanitizeLessonContent(
+export async function loadLeakNeedles(
   db: Db,
   lesson: typeof s.lessons.$inferSelect,
-  opts?: { modelOverride?: LanguageModel },
-): Promise<SanitizeResult> {
-  // ── Load learner for the displayName guard ────────────────────────────────
+): Promise<LeakNeedles> {
   const [trackRow] = await db
     .select({
-      ageBand: s.learners.ageBand,
       displayName: s.learners.displayName,
       learnerId: s.learners.id,
     })
@@ -402,41 +385,14 @@ export async function sanitizeLessonContent(
   const displayName = trackRow?.displayName ?? '';
   const learnerId = trackRow?.learnerId;
 
-  // ── Load dossier for extracts + citation provenance ───────────────────────
-  const snapshot = lesson.zpdSnapshot as { dossierId?: string };
-  let dossierExtractsText = '';
-  let dossierSourceUrls: string[] = [];
-  const dossierSourceUrlsSet = new Set<string>();
-
-  if (snapshot?.dossierId) {
-    const [dossier] = await db
-      .select()
-      .from(s.topicDossiers)
-      .where(eq(s.topicDossiers.id, snapshot.dossierId));
-    if (dossier) {
-      dossierSourceUrls = (dossier.sources as Array<{ url: string }>).map((src) => src.url);
-      dossierSourceUrls.forEach((u) => dossierSourceUrlsSet.add(u));
-      // Provide the dossier claims and source URLs as grounding context for rewrites.
-      // Spotlighted in <dossier-extracts> tags in the per-block prompt (data-never-instructions).
-      dossierExtractsText = [
-        `Sources: ${JSON.stringify(dossierSourceUrls)}`,
-        `Claims: ${JSON.stringify(dossier.claims)}`,
-        `Misconceptions: ${JSON.stringify(dossier.misconceptions)}`,
-      ].join('\n');
-    }
-  }
-
-  // ── Load learner-private needles for assertNoLearnerLeak ──────────────────
-  // Queries: mission (whyText, successCriteria), active learning records (title+body),
-  // user_upload resources (title). Minimal joins — all keyed by trackId.
   let missionWhyText = '';
   const successCriteria: string[] = [];
   const recordTexts: string[] = [];
   const uploadTitles: string[] = [];
   let emailLocalPart = '';
 
-  // Load user email for local-part extraction (via track → learner → user).
   if (learnerId) {
+    // Email local-part (via learner → user).
     const [learnerRow] = await db
       .select({ userId: s.learners.userId })
       .from(s.learners)
@@ -490,14 +446,67 @@ export async function sanitizeLessonContent(
     }
   }
 
-  const leakNeedles: LeakNeedles = {
-    displayName,
-    emailLocalPart,
-    missionWhyText,
-    successCriteria,
-    recordTexts,
-    uploadTitles,
-  };
+  return { displayName, emailLocalPart, missionWhyText, successCriteria, recordTexts, uploadTitles };
+}
+
+// ── sanitizeLessonContent ─────────────────────────────────────────────────────
+
+/**
+ * Result of sanitizing a lesson for public sharing.
+ *
+ * @remarks Sanitized content still contains answer keys (correctIndex/explanations).
+ * The public read path (P10-T3) MUST apply the P4b answer-key strip before serialization.
+ */
+export type SanitizeResult = {
+  content: Omit<LessonContent, 'openerItems'>;
+  dropped: string[];   // block type identifiers for dropped blocks
+  rewritten: string[]; // block type identifiers for rewritten blocks
+};
+
+/**
+ * Sanitize a lesson's content for public sharing (spec §7).
+ *
+ * @param db - Drizzle database connection for loading lesson + dossier + learner.
+ * @param lesson - The lesson DB row (must have status='ready' and a dossierId in zpdSnapshot).
+ * @param opts.modelOverride - Model override for testing (threads through to llmObject).
+ *
+ * @throws SanitizeError (retryable=false) when learner data detected in final content.
+ * @throws SanitizeError (retryable=false) when moderation flags content.
+ * @throws SanitizeError (retryable=true) when moderation service is unavailable.
+ * @throws SanitizeError (retryable=false) when validateLessonContent fails.
+ * @throws SanitizeError (retryable=false) when winCheck is dropped by LLM scan.
+ */
+export async function sanitizeLessonContent(
+  db: Db,
+  lesson: typeof s.lessons.$inferSelect,
+  opts?: { modelOverride?: LanguageModel },
+): Promise<SanitizeResult> {
+  // ── Load dossier for extracts + citation provenance ───────────────────────
+  const snapshot = lesson.zpdSnapshot as { dossierId?: string };
+  let dossierExtractsText = '';
+  let dossierSourceUrls: string[] = [];
+  const dossierSourceUrlsSet = new Set<string>();
+
+  if (snapshot?.dossierId) {
+    const [dossier] = await db
+      .select()
+      .from(s.topicDossiers)
+      .where(eq(s.topicDossiers.id, snapshot.dossierId));
+    if (dossier) {
+      dossierSourceUrls = (dossier.sources as Array<{ url: string }>).map((src) => src.url);
+      dossierSourceUrls.forEach((u) => dossierSourceUrlsSet.add(u));
+      // Provide the dossier claims and source URLs as grounding context for rewrites.
+      // Spotlighted in <dossier-extracts> tags in the per-block prompt (data-never-instructions).
+      dossierExtractsText = [
+        `Sources: ${JSON.stringify(dossierSourceUrls)}`,
+        `Claims: ${JSON.stringify(dossier.claims)}`,
+        `Misconceptions: ${JSON.stringify(dossier.misconceptions)}`,
+      ].join('\n');
+    }
+  }
+
+  // ── Load learner-private needles for assertNoLearnerLeak ──────────────────
+  const leakNeedles = await loadLeakNeedles(db, lesson);
 
   // ── Parse lesson content ──────────────────────────────────────────────────
   const rawContent = lesson.content as {

@@ -9,6 +9,7 @@
  * POST SanitizeError (non-retryable) → 422 {error:'cannot_share'}.
  *   Comment: fail closed, never publish on a failed gate (spec §7).
  * POST debounce (5s per user) → 429 {error:'too_fast'} (only for new shares).
+ * POST daily sanitize cap (20/day per learner) → 429 {error:'share_limit'}.
  * DELETE is idempotent: no row → 200 (public URL 404s after).
  * DELETE admin-removed row → 403 {error:'removed_by_moderation'}.
  *
@@ -77,6 +78,9 @@ export function createShareRouteHandlers(database: Db) {
       }
       if (result.kind === 'too_fast') {
         return NextResponse.json({ error: 'too_fast' }, { status: 429 });
+      }
+      if (result.kind === 'share_limit') {
+        return NextResponse.json({ error: 'share_limit' }, { status: 429 });
       }
       if (result.kind === 'removed_by_moderation') {
         // Republish CAS lost to a concurrent admin take_down — sticky.

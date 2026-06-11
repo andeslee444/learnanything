@@ -27,6 +27,10 @@ Stripe setup (one-time, in the Stripe dashboard): create a recurring $15/mo Pric
 
 Other launch items: **/privacy and /terms are templates pending legal review — have counsel review before public launch.** Set `CRON_SECRET` in Vercel env — `vercel.json` schedules the two cron routes. Signup has no email-verification flow, so digests go to unverified addresses — add verification before scaling sends (sender-reputation risk).
 
+**CC-BY deviation (spec §7, v1):** spec §7 requires CC-BY attribution and per-generator quote caps on public lesson pages. v1 does NOT implement these — it relies on paraphrase-only generation and citation links on public pages instead. License-aware attribution (license metadata on dossier sources + required-format CC-BY attribution rendered on /learn pages) and generator-specific quote caps are tracked as a pre-scale follow-up before the first high-traffic public launch.
+
+**Known fast-follows:** ShareButton does not hydrate shared state on page reload — re-clicking Share is idempotent and free for already-approved rows (no LLM re-run), so the UX cost is low. Public-page caching (s-maxage / CDN) is deliberately omitted in v1 to keep unpublish latency zero — add it once the DMCA/takedown SLA is defined.
+
 ## Setup
 
 ```bash

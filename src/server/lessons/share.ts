@@ -25,6 +25,16 @@
  * same learner. Checked after ownership + idempotency so 404s/cached hits are not
  * rate-limited. Window: 5 seconds. Returns { kind: 'too_fast' }.
  *
+ * Daily sanitize cap: in-process per-learner counter of NEW sanitize runs (cap 20/day).
+ * Only increments when sanitizeLessonContent is actually about to run — idempotent
+ * share hits bypass it. Over cap → { kind: 'share_limit' } → route 429 + ONE
+ * alertFounder('report', {note:'share_limit_hit'}) per learner per day.
+ *
+ * Identity-slug guard: learner-typed topic is checked against displayName tokens
+ * (≥4 chars) and emailLocalPart (≥5 chars) before buildSlug. On a hit the slug
+ * degrades to 'lesson-{shortid}' (share still succeeds — privacy protection only
+ * applies to the URL, not the content).
+ *
  * Sticky moderation: admin takedown rows (moderationStatus === 'removed') are not
  * owner-deletable. unshareLesson returns { kind: 'removed_by_moderation' } → route 403.
  * Admin-controlled rows are managed by T3 admin actions — not by the owner.
@@ -33,8 +43,9 @@
 import { and, eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as s from '@/db/schema';
-import { sanitizeLessonContent, SanitizeError } from './sanitize';
+import { sanitizeLessonContent, loadLeakNeedles, SanitizeError } from './sanitize';
 import { badgeFor, ALERT_THRESHOLD } from './verdicts';
+import { alertFounder } from '@/lib/alerts';
 
 export type { SanitizeError };
 
@@ -69,9 +80,8 @@ export function slugifyTopic(topic: string): string {
 /**
  * Generate an 8-char base36-ish shortid from 4 random UUID bytes.
  * Uses only hex chars [0-9a-f] for simplicity and URL safety.
- * Exported for unit testing.
  */
-export function makeShortId(): string {
+function makeShortId(): string {
   // crypto.randomUUID() returns "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx".
   // Take the first 8 hex chars after stripping hyphens — always lowercase alnum.
   return crypto.randomUUID().replace(/-/g, '').slice(0, 8);
@@ -139,7 +149,8 @@ export type ShareError =
   | { kind: 'sanitize_unavailable'; retryable: true }
   | { kind: 'cannot_share'; reason: string }
   | { kind: 'too_fast' }
-  | { kind: 'removed_by_moderation' };
+  | { kind: 'removed_by_moderation' }
+  | { kind: 'share_limit' };
 
 // ── Per-user in-process debounce ──────────────────────────────────────────────
 
@@ -158,6 +169,59 @@ export function _clearShareDebounce(learnerId?: string): void {
   } else {
     _shareDebounceMap.clear();
   }
+}
+
+// ── Per-learner daily sanitize cap ───────────────────────────────────────────
+
+/**
+ * In-process per-learner DAILY counter of NEW sanitize runs.
+ *
+ * Cap: 20 sanitize runs per learner per calendar day (UTC).
+ * Only increments when sanitizeLessonContent is actually about to run — idempotent
+ * share hits (existing 'approved'/'removed' rows) never touch this counter.
+ * Resets at midnight UTC via the stored date key: "learnerId:YYYY-MM-DD".
+ *
+ * share/unshare/share cycles are the main abuse vector (unshare hard-deletes the
+ * row, so each re-share re-runs the full per-block LLM sanitize). The cap limits
+ * that to 20 new sanitize runs per learner per day — well above normal usage.
+ */
+type DailySanitizeEntry = { date: string; count: number };
+const _sanitizeDailyMap = new Map<string, DailySanitizeEntry>();
+const SANITIZE_DAILY_CAP = 20;
+
+/** Exported for testing — reset the cap counter between tests. */
+export function _clearShareDailyCap(learnerId?: string): void {
+  if (learnerId) {
+    _sanitizeDailyMap.delete(learnerId);
+  } else {
+    _sanitizeDailyMap.clear();
+  }
+}
+
+/** Returns true if the learner is over cap (counter already incremented). */
+function _checkAndIncrementDailyCap(learnerId: string): 'ok' | 'over_cap' {
+  const today = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD' UTC
+  const entry = _sanitizeDailyMap.get(learnerId);
+  if (!entry || entry.date !== today) {
+    // New day — reset counter.
+    _sanitizeDailyMap.set(learnerId, { date: today, count: 1 });
+    return 'ok';
+  }
+  if (entry.count >= SANITIZE_DAILY_CAP) {
+    return 'over_cap';
+  }
+  entry.count += 1;
+  return 'ok';
+}
+
+/** Tracks whether we've already fired the share_limit alert for this learner today. */
+const _sanitizeLimitAlertedMap = new Map<string, string>(); // learnerId → date
+
+function _fireLimitAlertOnce(learnerId: string): void {
+  const today = new Date().toISOString().slice(0, 10);
+  if (_sanitizeLimitAlertedMap.get(learnerId) === today) return;
+  _sanitizeLimitAlertedMap.set(learnerId, today);
+  alertFounder('report', { note: 'share_limit_hit', learnerId });
 }
 
 // ── createShareHandlers ───────────────────────────────────────────────────────
@@ -288,7 +352,23 @@ export function createShareHandlers(db: Db) {
         )
         .returning({ id: s.sharedLessons.id });
       if (republished.length === 0) {
-        // Lost the race to an admin action — return the row untouched.
+        // Lost the CAS race — re-read to distinguish admin REPUBLISH (→ idempotent success)
+        // from admin REMOVE (→ removed_by_moderation). A concurrent admin REPUBLISH flips
+        // the row to 'approved', so the CAS condition fails but the share already succeeded.
+        const [raceRow] = await db
+          .select({ moderationStatus: s.sharedLessons.moderationStatus })
+          .from(s.sharedLessons)
+          .where(eq(s.sharedLessons.lessonId, lesson.id));
+        if (raceRow?.moderationStatus === 'approved') {
+          // Admin flipped the row to 'approved' concurrently — return idempotent success.
+          return {
+            slug: existing.slug,
+            url: `/learn/${vert}/${existing.slug}`,
+            vertical: vert,
+            alreadyExisted: true,
+          };
+        }
+        // Row is 'removed' (or gone) — admin takedown wins.
         return { kind: 'removed_by_moderation' };
       }
 
@@ -317,6 +397,15 @@ export function createShareHandlers(db: Db) {
       }
     }, DEBOUNCE_MS);
 
+    // ── Daily sanitize cap (spend-abuse guard) ────────────────────────────────
+    // share/unshare/share cycles re-run the full per-block LLM sanitize — cap at 20/day
+    // per learner. Only checked here (before sanitizeLessonContent runs). Idempotent
+    // hits (existing approved/removed rows, handled above) never reach this point.
+    if (_checkAndIncrementDailyCap(learnerId) === 'over_cap') {
+      _fireLimitAlertOnce(learnerId);
+      return { kind: 'share_limit' };
+    }
+
     // ── Sanitize ─────────────────────────────────────────────────────────────
     let sanitizeResult: Awaited<ReturnType<typeof sanitizeLessonContent>>;
     try {
@@ -335,12 +424,51 @@ export function createShareHandlers(db: Db) {
     // ── Badge snapshot ────────────────────────────────────────────────────────
     const badgeSnapshot = await buildBadgeSnapshot(db, lesson);
 
-    // ── Slug with retry-once on collision ─────────────────────────────────────
+    // ── Identity-slug guard ───────────────────────────────────────────────────
+    // The topic is learner-typed free text; build a safe slug or degrade to
+    // shortid-only if the topic contains identity tokens (displayName ≥4 chars,
+    // emailLocalPart ≥5 chars). Do NOT block the share — only sanitize the URL.
+    // Example: 'Chess for my daughter Emma Chen' → 'lesson-<shortid>' (not 'chess-for-my-daughter-emma-chen-<shortid>').
     const topic = (lesson.spec as { topic?: string })?.topic ?? track.topic;
+    let safeTopicForSlug: string;
+    {
+      const needles = await loadLeakNeedles(db, lesson);
+      function normStr(v: string) {
+        return v.toLowerCase().replace(/\s+/g, ' ').trim();
+      }
+      // Collect IDENTITY tokens only (displayName + emailLocalPart — not mission text or records).
+      const identityTokens: string[] = [];
+      if (needles.displayName) {
+        const tokens = normStr(needles.displayName).split(' ').filter((t) => t.length >= 4);
+        identityTokens.push(...tokens);
+        const full = normStr(needles.displayName);
+        if (full.length >= 4) identityTokens.push(full);
+      }
+      if (needles.emailLocalPart) {
+        const ep = normStr(needles.emailLocalPart);
+        if (ep.length >= 5) identityTokens.push(ep);
+      }
+      // Split the topic into its slug words (the same tokens that end up in the URL).
+      // Matching against slug-words prevents 'emma' from matching 'dilemma' and
+      // 'coll' from matching 'collision'.
+      const topicSlugWords = slugifyTopic(topic).split('-').filter(Boolean);
+      const hasIdentity = identityTokens.some((tok) => topicSlugWords.includes(tok));
+      if (hasIdentity) {
+        // Identity in learner-typed topic must not publish; degrade, don't block.
+        safeTopicForSlug = '';
+      } else {
+        safeTopicForSlug = topic;
+      }
+    }
+
     const shortIdGen = opts?.shortIdGen ?? makeShortId;
 
     const tryInsert = async (): Promise<ShareSuccess | null> => {
-      const slug = buildSlug(topic, shortIdGen());
+      const shortId = shortIdGen();
+      // Use empty string topic → buildSlug yields just the shortid, prefixed 'lesson-'.
+      const slug = safeTopicForSlug
+        ? buildSlug(safeTopicForSlug, shortId)
+        : `lesson-${shortId}`;
 
       try {
         await db.insert(s.sharedLessons).values({

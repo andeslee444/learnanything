@@ -1,7 +1,9 @@
 /**
- * Pure verdict model for per-block verification results.
- * No DB access, no LLM calls — these are deterministic classifiers used
- * both inline and in tests.
+ * Verdict model for per-block verification results.
+ *
+ * Most helpers here are pure deterministic classifiers (no DB, no LLM calls).
+ * Exception: maybeUnpublishSharedOnRegression writes to the DB — it is called
+ * from the verify workflow's finalize step and is intentionally side-effectful.
  */
 
 import { eq, sql } from 'drizzle-orm';
