@@ -63,7 +63,11 @@ export async function signUpAndOnboard(page: Page): Promise<{ email: string; tra
 
   // ── 4. Track page ─────────────────────────────────────────────
   await expect(page).toHaveURL(/\/tracks\/[^/]+$/, { timeout: 15_000 });
-  await expect(page.getByTestId('build-status')).toBeVisible({ timeout: 10_000 });
+  // build-status is transient — fake-mode init can complete before it ever paints,
+  // so accept either the building panel or the already-rendered calibration quiz.
+  await expect(page.getByTestId('build-status').or(page.getByTestId('quiz-option-0'))).toBeVisible({
+    timeout: 10_000,
+  });
 
   // ── 5. Calibration quiz ──────────────────────────────────────
   await expect(page.getByTestId('quiz-option-0')).toBeVisible({ timeout: 30_000 });
