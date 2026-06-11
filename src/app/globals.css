@@ -62,3 +62,92 @@ html {
     scroll-behavior: auto !important;
   }
 }
+
+/* ── Spec §11: print-beautiful reference docs ────────────────────────────── */
+@media print {
+  /* Hide navigation and interactive elements */
+  .no-print {
+    display: none !important;
+  }
+
+  /* Page setup */
+  @page {
+    margin: 2cm;
+    size: A4;
+  }
+
+  body {
+    background: white !important;
+    color: #000 !important;
+  }
+
+  /* Doc headings use a serif font for readable print output */
+  .print-serif h1,
+  .print-serif h2,
+  .print-serif h3,
+  .print-serif h4 {
+    font-family: Georgia, 'Times New Roman', serif;
+    color: #000;
+  }
+
+  .print-serif h1 {
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    border-bottom: 1px solid #ccc;
+    padding-bottom: 0.25rem;
+  }
+
+  .print-serif h2 {
+    font-size: 1.2rem;
+    font-weight: 600;
+    margin-top: 1.25rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .print-serif h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-top: 1rem;
+    margin-bottom: 0.3rem;
+  }
+
+  /* Clean body text */
+  .print-serif p,
+  .print-serif li {
+    font-size: 0.9rem;
+    line-height: 1.6;
+    color: #111;
+  }
+
+  /* Code blocks: monospace, bordered */
+  .print-serif pre,
+  .print-serif code {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.8rem;
+    background: #f8f8f8 !important;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    padding: 0.1em 0.25em;
+    color: #222;
+  }
+
+  .print-serif pre {
+    padding: 0.75rem;
+    margin: 0.75rem 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* No link underline decoration that looks weird in print */
+  .print-serif a {
+    color: #000;
+    text-decoration: none;
+  }
+
+  /* Avoid breaking inside a section */
+  .print-section {
+    break-inside: avoid;
+    margin-bottom: 1.5rem;
+  }
+}

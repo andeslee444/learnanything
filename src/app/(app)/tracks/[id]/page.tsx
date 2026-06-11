@@ -1,5 +1,6 @@
 import { headers } from 'next/headers';
 import { notFound, redirect } from 'next/navigation';
+import Link from 'next/link';
 import { desc, eq } from 'drizzle-orm';
 import { auth } from '@/lib/auth';
 import { db } from '@/lib/db';
@@ -135,7 +136,16 @@ export default async function TrackDetailPage({ params }: { params: Promise<{ id
       {/* Learning map (nodes exist) */}
       {nodes.length > 0 && (
         <section className="mt-8" aria-label="Learning map">
-          <h2 className="text-lg font-medium text-ink-900">Learning map</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-medium text-ink-900">Learning map</h2>
+            <Link
+              href={`/tracks/${id}/library`}
+              data-testid="library-link"
+              className="text-sm text-sky-600 hover:text-sky-700 underline underline-offset-2"
+            >
+              Library →
+            </Link>
+          </div>
           <p
             data-testid="map-summary"
             className="mt-1 text-sm text-ink-600"
