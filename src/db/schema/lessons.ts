@@ -43,8 +43,22 @@ export const sharedLessons = pgTable('shared_lessons', {
   lessonId: uuid('lesson_id').notNull().unique().references(() => lessons.id, { onDelete: 'cascade' }),
   sanitizedContent: jsonb('sanitized_content').notNull(),
   slug: text('slug').notNull().unique(), // {topic-slug}-{shortid}
+  // vertical copied from the source track at share time (used to build the public URL /learn/{vertical}/{slug}).
+  vertical: text('vertical').notNull().default(''),
   moderationStatus: moderationStatus('moderation_status').notNull().default('pending'),
   verificationStatus: verificationStatus('verification_status').notNull().default('pending'),
+  /**
+   * Snapshot of the source lesson's verification summary at share time.
+   * Shape: { overallStatus: 'verified'|'issues'|'pending', faithfulnessScore: number|null,
+   *          checkedAt: string|null, blocks: Array<{ blockId, badge: 'verified'|'unverified' }> }
+   *
+   * DECISION (spec §7 deviation, v1): spec says regenerated content should re-run async-verify.
+   * v1 snapshots the SOURCE lesson's badges instead — the rewrite is dossier-grounded with
+   * citations preserved deterministically, and the P10-T4 faithfulness-regression hook
+   * auto-unpublishes when the source's verification degrades. A second verify scope is post-v1
+   * (the (lesson_id, block_id) unique index on verification_results makes reuse collide today).
+   */
+  badgeSnapshot: jsonb('badge_snapshot').notNull().default('{}'),
   publishedAt: timestamp('published_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
