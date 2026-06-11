@@ -298,6 +298,31 @@ describe('FSRS review engine', () => {
       expect(item.options).toHaveLength(4);
       expect(item.options).toContain(fakeCard.definition);
     });
+
+    it('shuffle is unbiased — correct answer position is near-uniform over 400 distinct card ids', () => {
+      // Generate 400 cards with distinct UUIDs so each gets a different seed.
+      // Tally which of the 4 positions the correct answer lands in.
+      // Expected count per bucket: 100 (400 / 4).
+      // Loose uniformity band: [60, 140] — far from a chi-sq test, but catches gross bias.
+      const positionCounts = [0, 0, 0, 0];
+      const distractors = ['Distractor A.', 'Distractor B.', 'Distractor C.'];
+
+      for (let i = 0; i < 400; i++) {
+        // Use a deterministic UUID-like id based on index
+        const hex = i.toString(16).padStart(12, '0');
+        const id = `${hex.slice(0, 8)}-0000-0000-0000-${hex.padStart(12, '0')}`;
+        const card = { id, term: 'term', definition: `Correct definition for ${i}.` };
+        // Unique definition per card so indexOf is unambiguous
+        const item = buildReviewItem(card, distractors);
+        positionCounts[item.correctIndex]++;
+      }
+
+      // Each bucket should be within [60, 140]
+      for (let pos = 0; pos < 4; pos++) {
+        expect(positionCounts[pos]).toBeGreaterThanOrEqual(60);
+        expect(positionCounts[pos]).toBeLessThanOrEqual(140);
+      }
+    });
   });
 
   // ── gradeReview ──────────────────────────────────────────────────────────

@@ -7,7 +7,7 @@
  *   correct → Rating.Good (3)
  *   incorrect → Rating.Again (1)
  */
-import { and, eq, lte, not, sql } from 'drizzle-orm';
+import { and, eq, lte } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { createEmptyCard, fsrs, Rating } from 'ts-fsrs';
 import type { Card, ReviewLog } from 'ts-fsrs';
@@ -52,7 +52,10 @@ function lcgShuffle<T>(arr: T[], seed: number): T[] {
   let state = seed;
   for (let i = out.length - 1; i > 0; i--) {
     state = (Math.imul(state, 1664525) + 1013904223) >>> 0; // LCG — deterministic, no Math.random
-    const j = state % (i + 1);
+    // Float-derived index avoids modulo bias: state is a 32-bit unsigned int in [0, 2^32).
+    // Dividing by 2^32 yields a float in [0, 1) with no bias across any range ≤ 2^32.
+    const f = state / 0x100000000;
+    const j = Math.floor(f * (i + 1));
     [out[i], out[j]] = [out[j], out[i]];
   }
   return out;
@@ -156,7 +159,6 @@ export async function getDueCards(
     .where(
       and(
         eq(s.reviewCards.learnerId, learnerId),
-        not(sql`${s.reviewCards.glossaryTermId} IS NULL`),
         lte(s.reviewCards.due, now),
       ),
     )
@@ -245,77 +247,79 @@ export interface GradeReviewResult {
 export async function gradeReview(db: Db, opts: GradeReviewOpts): Promise<GradeReviewResult> {
   const now = opts.now ?? new Date();
 
-  // Ownership check — also loads current card state
-  const [cardRow] = await db
-    .select()
-    .from(s.reviewCards)
-    .where(and(eq(s.reviewCards.id, opts.cardId), eq(s.reviewCards.learnerId, opts.learnerId)))
-    .limit(1);
+  return db.transaction(async (tx) => {
+    // Ownership check — also loads current card state
+    const [cardRow] = await tx
+      .select()
+      .from(s.reviewCards)
+      .where(and(eq(s.reviewCards.id, opts.cardId), eq(s.reviewCards.learnerId, opts.learnerId)))
+      .limit(1);
 
-  if (!cardRow) {
-    throw new Error('review card not found or not owned by learner', { cause: { cardId: opts.cardId, learnerId: opts.learnerId } });
-  }
+    if (!cardRow) {
+      throw new Error('review card not found or not owned by learner', { cause: { cardId: opts.cardId, learnerId: opts.learnerId } });
+    }
 
-  if (!cardRow.glossaryTermId) {
-    throw new Error('review card has no glossary term', { cause: { cardId: opts.cardId } });
-  }
+    if (!cardRow.glossaryTermId) {
+      throw new Error('review card has no glossary term', { cause: { cardId: opts.cardId } });
+    }
 
-  // Reconstruct ts-fsrs Card from DB row
-  const currentCard: Card = {
-    due: cardRow.due,
-    stability: cardRow.stability,
-    difficulty: cardRow.difficulty,
-    elapsed_days: cardRow.elapsedDays,
-    scheduled_days: cardRow.scheduledDays,
-    learning_steps: cardRow.learningSteps,
-    reps: cardRow.reps,
-    lapses: cardRow.lapses,
-    state: cardRow.state as Card['state'],
-    last_review: cardRow.lastReview ?? undefined,
-  };
+    // Reconstruct ts-fsrs Card from DB row
+    const currentCard: Card = {
+      due: cardRow.due,
+      stability: cardRow.stability,
+      difficulty: cardRow.difficulty,
+      elapsed_days: cardRow.elapsedDays,
+      scheduled_days: cardRow.scheduledDays,
+      learning_steps: cardRow.learningSteps,
+      reps: cardRow.reps,
+      lapses: cardRow.lapses,
+      state: cardRow.state as Card['state'],
+      last_review: cardRow.lastReview ?? undefined,
+    };
 
-  // Deterministic v1 rating map
-  const rating: Rating.Good | Rating.Again = opts.correct ? Rating.Good : Rating.Again;
+    // Deterministic v1 rating map
+    const rating: Rating.Good | Rating.Again = opts.correct ? Rating.Good : Rating.Again;
 
-  const f = fsrs();
-  const result = f.next(currentCard, now, rating);
-  const nextCard = result.card;
-  const log: ReviewLog = result.log;
+    const f = fsrs();
+    const result = f.next(currentCard, now, rating);
+    const nextCard = result.card;
+    const log: ReviewLog = result.log;
 
-  // Update review_cards with new FSRS state
-  await db
-    .update(s.reviewCards)
-    .set(cardToDbFields(nextCard))
-    .where(eq(s.reviewCards.id, opts.cardId));
+    // Update review_cards with new FSRS state
+    await tx
+      .update(s.reviewCards)
+      .set(cardToDbFields(nextCard))
+      .where(eq(s.reviewCards.id, opts.cardId));
 
-  // Insert review_log with ALL FSRSHistory fields
-  await db.insert(s.reviewLog).values({
-    cardId: opts.cardId,
-    rating: log.rating as number,
-    state: log.state as number,
-    due: log.due,
-    stability: log.stability,
-    difficulty: log.difficulty,
-    elapsedDays: log.elapsed_days,
-    scheduledDays: log.scheduled_days,
-    lastElapsedDays: log.last_elapsed_days,
-    learningSteps: log.learning_steps,
-    reviewedAt: now,
+    // Insert review_log with ALL FSRSHistory fields
+    await tx.insert(s.reviewLog).values({
+      cardId: opts.cardId,
+      rating: log.rating as number,
+      state: log.state as number,
+      due: log.due,
+      stability: log.stability,
+      difficulty: log.difficulty,
+      elapsedDays: log.elapsed_days,
+      scheduledDays: log.scheduled_days,
+      lastElapsedDays: log.last_elapsed_days,
+      learningSteps: log.learning_steps,
+      reviewedAt: now,
+    });
+
+    // Insert attempt_event for review (eventType='review', widened per Phase 5 plan)
+    await tx.insert(s.attemptEvents).values({
+      learnerId: opts.learnerId,
+      lessonId: null,
+      blockId: opts.cardId,
+      eventType: 'review',
+      correct: opts.correct,
+      payload: { cardId: opts.cardId, glossaryTermId: cardRow.glossaryTermId },
+    });
+
+    return {
+      rating,
+      nextDue: nextCard.due,
+      scheduledDays: nextCard.scheduled_days,
+    };
   });
-
-  // Insert attempt_event for review (eventType='review', widened per Phase 5 plan)
-  await db.insert(s.attemptEvents).values({
-    learnerId: opts.learnerId,
-    lessonId: null,
-    blockId: opts.cardId,
-    eventType: 'review',
-    correct: opts.correct,
-    payload: { cardId: opts.cardId, glossaryTermId: cardRow.glossaryTermId },
-  });
-
-  return {
-    rating,
-    nextDue: nextCard.due,
-    scheduledDays: nextCard.scheduled_days,
-  };
 }
