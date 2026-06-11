@@ -78,6 +78,10 @@ export function createShareRouteHandlers(database: Db) {
       if (result.kind === 'too_fast') {
         return NextResponse.json({ error: 'too_fast' }, { status: 429 });
       }
+      if (result.kind === 'removed_by_moderation') {
+        // Republish CAS lost to a concurrent admin take_down — sticky.
+        return NextResponse.json({ error: 'removed_by_moderation' }, { status: 403 });
+      }
       // cannot_share — fail closed
       return NextResponse.json({ error: 'cannot_share' }, { status: 422 });
     }

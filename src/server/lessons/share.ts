@@ -30,7 +30,7 @@
  * Admin-controlled rows are managed by T3 admin actions — not by the owner.
  */
 
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as s from '@/db/schema';
 import { sanitizeLessonContent, SanitizeError } from './sanitize';
@@ -271,7 +271,11 @@ export function createShareHandlers(db: Db) {
 
       const freshBadgeSnapshot = await buildBadgeSnapshot(db, lesson);
 
-      await db
+      // CAS on moderationStatus='pending': sanitize takes seconds, and an admin
+      // take_down ('removed') landing in that window must NOT be overwritten —
+      // sticky takedowns are a DMCA guarantee (docs/takedown-process.md). Mirrors
+      // the regression hook's CAS in verdicts.ts.
+      const republished = await db
         .update(s.sharedLessons)
         .set({
           sanitizedContent: reSanitizeResult.content as Record<string, unknown>,
@@ -279,7 +283,14 @@ export function createShareHandlers(db: Db) {
           moderationStatus: 'approved',
           verificationStatus: lesson.verificationStatus,
         })
-        .where(eq(s.sharedLessons.lessonId, lesson.id));
+        .where(
+          and(eq(s.sharedLessons.lessonId, lesson.id), eq(s.sharedLessons.moderationStatus, 'pending')),
+        )
+        .returning({ id: s.sharedLessons.id });
+      if (republished.length === 0) {
+        // Lost the race to an admin action — return the row untouched.
+        return { kind: 'removed_by_moderation' };
+      }
 
       return {
         slug: existing.slug,

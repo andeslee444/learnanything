@@ -182,6 +182,13 @@ export function createAdminQueueHandlers(dbInstance: NodePgDatabase<any>) {
       return NextResponse.json({ error: 'lesson_not_failed' }, { status: 409 });
     }
 
+    // Clear stale verification rows: the retry regenerates content, and old rows
+    // (seeded ON CONFLICT DO NOTHING + frozen by the 'regenerated' monotonicity
+    // guard) would otherwise aggregate into the new lesson's finalize forever —
+    // orphan 'unverified' rows could pin the lesson at 'issues' and block the
+    // re-share heal path.
+    await dbInstance.delete(s.verificationResults).where(eq(s.verificationResults.lessonId, lessonId));
+
     // Start the workflow WITHOUT placeHold (house-paid; no hold → capture cycle).
     start(generateLessonWorkflow, [lessonId]).then(async (run) => {
       try {

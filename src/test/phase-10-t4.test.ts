@@ -558,3 +558,95 @@ describe('shareLesson — cheap badge refresh (no re-sanitize)', () => {
     expect(snap.checkedAt).toBe(existingCheckedAt);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Adversarial-verifier regressions (post-T4 review)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('adversarial regressions — sticky takedown CAS + stale verification rows', () => {
+  it('H1: admin take_down landing during re-share sanitize is NOT overwritten (CAS)', async () => {
+    await seedTrustDomains();
+    const dossier = await seedDossier('h1cas');
+    const { track } = await seedWorld('h1cas');
+    const lesson = await seedReadyLesson(track.id, dossier.id, {
+      seq: 90,
+      verificationStatus: 'verified',
+      faithfulnessScore: 0.9,
+    });
+    const slug = `h1cas-${Date.now().toString(36)}`;
+    await seedSharedLesson(lesson.id, slug, 'pending');
+
+    // Simulate the race: the admin take_down lands WHILE sanitize is running
+    // (sanitize is a seconds-wide LLM window in production).
+    const sanitizeSpy = vi.spyOn(sanitizeModule, 'sanitizeLessonContent').mockImplementation(async (db, l) => {
+      await testDb
+        .update(s.sharedLessons)
+        .set({ moderationStatus: 'removed' })
+        .where(eq(s.sharedLessons.lessonId, l.id));
+      return { content: { blocks: [], winCheck: { items: [] } }, dropped: [], rewritten: [] } as never;
+    });
+
+    try {
+      const { shareLesson } = createShareHandlers(testDb);
+      const result = await shareLesson(lesson, track);
+
+      // The republish CAS must lose: result is removed_by_moderation, row stays removed.
+      expect('kind' in result && result.kind === 'removed_by_moderation').toBe(true);
+      const [row] = await testDb
+        .select({ status: s.sharedLessons.moderationStatus })
+        .from(s.sharedLessons)
+        .where(eq(s.sharedLessons.lessonId, lesson.id));
+      expect(row.status).toBe('removed'); // sticky — DMCA guarantee
+    } finally {
+      sanitizeSpy.mockRestore();
+    }
+  });
+
+  it('H2: admin retry clears stale verification_results so finalize aggregates fresh rows only', async () => {
+    const dossier = await seedDossier('h2stale');
+    const { track } = await seedWorld('h2stale');
+    const lesson = await seedReadyLesson(track.id, dossier.id, {
+      seq: 91,
+      verificationStatus: 'issues',
+      faithfulnessScore: 0.4,
+    });
+    // Old verification rows from the pre-retry content
+    await testDb.insert(s.verificationResults).values([
+      { lessonId: lesson.id, blockId: 'old-block-1', status: 'unverified', claimsVerified: 0, claimsTotal: 3 },
+      { lessonId: lesson.id, blockId: 'old-block-2', status: 'verified', claimsVerified: 2, claimsTotal: 2 },
+    ]);
+    // Retry requires status 'failed'
+    await testDb.update(s.lessons).set({ status: 'failed' }).where(eq(s.lessons.id, lesson.id));
+
+    const { createAdminQueueHandlers } = await import('@/app/api/admin/queue/route');
+    process.env.ADMIN_EMAILS = 'admin-h2@test.dev';
+    vi.resetModules();
+    vi.doMock('@/lib/auth', () => ({
+      auth: { api: { getSession: vi.fn().mockResolvedValue({ user: { id: 'admin-h2', email: 'admin-h2@test.dev' } }) } },
+    }));
+    vi.doMock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers()) }));
+    try {
+      const route = await import('@/app/api/admin/queue/route');
+      const { POST } = route.createAdminQueueHandlers(testDb);
+      const { NextRequest } = await import('next/server');
+      const res = await POST(
+        new NextRequest('http://localhost/api/admin/queue', {
+          method: 'POST',
+          body: JSON.stringify({ lessonId: lesson.id, action: 'retry' }),
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      expect(res.status).toBe(200);
+
+      const rows = await testDb
+        .select()
+        .from(s.verificationResults)
+        .where(eq(s.verificationResults.lessonId, lesson.id));
+      expect(rows).toHaveLength(0); // stale rows cleared
+    } finally {
+      vi.resetModules();
+      delete process.env.ADMIN_EMAILS;
+      void createAdminQueueHandlers; // first import retained intentionally before resetModules
+    }
+  });
+});
