@@ -566,5 +566,58 @@ describe('FSRS review engine', () => {
       });
       expect(result.rating).toBe(Rating.Good);
     });
+
+    // ── Idempotency guard (duplicate-submit / double-click) ──────────────────
+
+    it('duplicate guard: second gradeReview within 2s returns applied:false with one review_log row', async () => {
+      const { learner, track } = await seedLearnerTrack('dup');
+      const rec = await seedEvidenceRecord(track.id);
+      const term = await seedGlossaryTerm(track.id, rec.id);
+      const { id: cardId } = await createCardForGlossaryTerm(testDb, {
+        learnerId: learner.id,
+        glossaryTermId: term.id,
+      });
+
+      const now = new Date('2026-06-10T12:00:00Z');
+
+      // First grade — should apply and return applied:true
+      const first = await gradeReview(testDb, { cardId, learnerId: learner.id, correct: true, now });
+      expect(first.applied).toBe(true);
+
+      // Second grade at the EXACT same timestamp (within 2s window)
+      const second = await gradeReview(testDb, { cardId, learnerId: learner.id, correct: true, now });
+      expect(second.applied).toBe(false);
+      // nextDue and scheduledDays reflect the state after the first apply, not a second
+      expect(second.nextDue).toEqual(first.nextDue);
+
+      // Only ONE review_log row should exist (the second was a no-op)
+      const { eq } = await import('drizzle-orm');
+      const logs = await testDb.select().from(s.reviewLog).where(eq(s.reviewLog.cardId, cardId));
+      expect(logs).toHaveLength(1);
+    });
+
+    it('duplicate guard: second gradeReview after 2s DOES apply (two review_log rows)', async () => {
+      const { learner, track } = await seedLearnerTrack('dup2');
+      const rec = await seedEvidenceRecord(track.id);
+      const term = await seedGlossaryTerm(track.id, rec.id);
+      const { id: cardId } = await createCardForGlossaryTerm(testDb, {
+        learnerId: learner.id,
+        glossaryTermId: term.id,
+      });
+
+      const now1 = new Date('2026-06-10T12:00:00.000Z');
+      // Second grade is 3 seconds later — outside the 2s window
+      const now2 = new Date('2026-06-10T12:00:03.000Z');
+
+      const first = await gradeReview(testDb, { cardId, learnerId: learner.id, correct: true, now: now1 });
+      expect(first.applied).toBe(true);
+
+      const second = await gradeReview(testDb, { cardId, learnerId: learner.id, correct: true, now: now2 });
+      expect(second.applied).toBe(true);
+
+      const { eq } = await import('drizzle-orm');
+      const logs = await testDb.select().from(s.reviewLog).where(eq(s.reviewLog.cardId, cardId));
+      expect(logs).toHaveLength(2);
+    });
   });
 });

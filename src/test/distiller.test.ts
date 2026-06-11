@@ -645,6 +645,54 @@ describe('distillLesson', () => {
       .where(eq(s.referenceDocs.trackId, track.id));
     expect(docs).toHaveLength(1);
   });
+
+  // ── Reference doc heal path ───────────────────────────────────────────────
+
+  it('heal: distill → delete the ref doc row → distill again → doc recreated, no new records', async () => {
+    const { learner, track, node } = await seedWorld('heal');
+    const lesson = await seedReadyLesson(track.id, node.id);
+    await seedWinCheckAttempts(learner.id, lesson.id, [
+      { id: 'wc1', correct: true },
+      { id: 'wc2', correct: true },
+    ]);
+
+    // First distill: creates records + ref doc
+    const first = await distillLesson(testDb, { lessonId: lesson.id, learnerId: learner.id });
+    expect(first.inserted).toBe(true);
+    expect(first.referenceDocId).not.toBeNull();
+
+    const recordCountBefore = (
+      await testDb.select().from(s.learningRecords).where(eq(s.learningRecords.trackId, track.id))
+    ).length;
+
+    // Simulate the ref doc being deleted externally
+    await testDb.delete(s.referenceDocs).where(eq(s.referenceDocs.trackId, track.id));
+
+    const docsAfterDelete = await testDb
+      .select()
+      .from(s.referenceDocs)
+      .where(eq(s.referenceDocs.trackId, track.id));
+    expect(docsAfterDelete).toHaveLength(0);
+
+    // Second distill: idempotency guard fires for records, but heal path recreates the doc
+    const second = await distillLesson(testDb, { lessonId: lesson.id, learnerId: learner.id });
+    expect(second.skipped).toBe(true);
+    expect(second.healedReferenceDoc).toBe(true);
+
+    // No new learning_records should have been inserted
+    const recordCountAfter = (
+      await testDb.select().from(s.learningRecords).where(eq(s.learningRecords.trackId, track.id))
+    ).length;
+    expect(recordCountAfter).toBe(recordCountBefore);
+
+    // The ref doc should now exist again
+    const docsAfterHeal = await testDb
+      .select()
+      .from(s.referenceDocs)
+      .where(eq(s.referenceDocs.trackId, track.id));
+    expect(docsAfterHeal).toHaveLength(1);
+    expect(docsAfterHeal[0].linkedLessonIds).toContain(lesson.id);
+  });
 });
 
 // ── Fixture validation ─────────────────────────────────────────────────────────

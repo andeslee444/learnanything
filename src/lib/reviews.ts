@@ -7,7 +7,7 @@
  *   correct → Rating.Good (3)
  *   incorrect → Rating.Again (1)
  */
-import { and, asc, eq, lte, ne } from 'drizzle-orm';
+import { and, asc, eq, lte, ne, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { createEmptyCard, fsrs, Rating } from 'ts-fsrs';
 import type { Card, ReviewLog } from 'ts-fsrs';
@@ -287,6 +287,12 @@ export interface GradeReviewResult {
   nextDue: Date;
   /** Scheduled days until next review (0 if still in learning/relearning steps). */
   scheduledDays: number;
+  /**
+   * Whether FSRS was actually applied this call.
+   * false when the idempotency guard fires (card's last_review is within 2s of now),
+   * which prevents duplicate review_log rows from a double-submit race.
+   */
+  applied: boolean;
 }
 
 /**
@@ -307,7 +313,11 @@ export async function gradeReview(db: Db, opts: GradeReviewOpts): Promise<GradeR
   const now = opts.now ?? new Date();
 
   return db.transaction(async (tx) => {
-    // Ownership check — also loads current card state
+    // Row-level lock: serialize concurrent gradeReview calls for the same card.
+    // This prevents duplicate review_log rows from a double-submit race.
+    await tx.execute(sql`SELECT id FROM review_cards WHERE id = ${opts.cardId} FOR UPDATE`);
+
+    // Ownership check — also loads current card state (after the lock is held)
     const [cardRow] = await tx
       .select()
       .from(s.reviewCards)
@@ -320,6 +330,23 @@ export async function gradeReview(db: Db, opts: GradeReviewOpts): Promise<GradeR
 
     if (!cardRow.glossaryTermId) {
       throw new Error('review card has no glossary term', { cause: { cardId: opts.cardId } });
+    }
+
+    // Idempotency guard: if the card was reviewed within 2 seconds of `now`, treat
+    // this as a duplicate submit and return the current state without re-applying FSRS.
+    // The serialized loser of a double-click race will see the winner's lastReview after
+    // acquiring the lock, hit this guard, and return applied:false with the current state.
+    const DUPLICATE_WINDOW_MS = 2000;
+    if (
+      cardRow.lastReview !== null &&
+      Math.abs(now.getTime() - cardRow.lastReview.getTime()) < DUPLICATE_WINDOW_MS
+    ) {
+      return {
+        rating: opts.correct ? Rating.Good : Rating.Again,
+        nextDue: cardRow.due,
+        scheduledDays: cardRow.scheduledDays,
+        applied: false,
+      };
     }
 
     // Reconstruct ts-fsrs Card from DB row
@@ -379,6 +406,7 @@ export async function gradeReview(db: Db, opts: GradeReviewOpts): Promise<GradeR
       rating,
       nextDue: nextCard.due,
       scheduledDays: nextCard.scheduled_days,
+      applied: true,
     };
   });
 }

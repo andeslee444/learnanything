@@ -250,7 +250,7 @@ export async function sweepStaleLessons(
   return { swept };
 }
 
-/** Minimal mastery update on win-check pass — Phase 5 replaces this with evidence-gated learning records. */
+/** Immediate UX cache only — the distiller (Phase 5) is the evidence authority for mastery; this write keeps the map snappy. */
 export async function recordWinCheckResult(db: Db, lessonId: string, correct: number, total: number) {
   if (!winCheckPassed(correct, total)) return { passed: false };
   const [lesson] = await db.select().from(s.lessons).where(eq(s.lessons.id, lessonId));

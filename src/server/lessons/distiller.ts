@@ -198,6 +198,11 @@ export interface DistillResult {
   cardIds: string[];
   /** Reference doc id (upserted in step 7), null if skipped or none generated. */
   referenceDocId: string | null;
+  /**
+   * Present only when skipped=true. true if the heal path re-ran step 7 to
+   * recreate a lost reference doc; false/undefined otherwise.
+   */
+  healedReferenceDoc?: boolean;
 }
 
 /**
@@ -227,7 +232,7 @@ export async function distillLesson(
 ): Promise<DistillResult> {
   // ── Precondition: idempotency check ──────────────────────────────────────
   const [idempotencyCheck] = await db
-    .select({ id: s.learningRecords.id })
+    .select({ id: s.learningRecords.id, trackId: s.learningRecords.trackId })
     .from(s.learningRecords)
     .innerJoin(s.tracks, eq(s.learningRecords.trackId, s.tracks.id))
     .where(
@@ -239,7 +244,87 @@ export async function distillLesson(
     .limit(1);
 
   if (idempotencyCheck) {
-    return { inserted: false, skipped: true, recordIds: [], promotedTermIds: [], cardIds: [], referenceDocId: null };
+    // Heal path: records already exist, but check whether the reference doc
+    // for this lesson was lost (e.g. deleted externally or a prior run crashed
+    // after step 3-6 but before step 7).
+    // If none of the reference_docs for this track have this lessonId in
+    // linkedLessonIds, re-run step 7 to recreate or update the doc.
+    let healedReferenceDoc = false;
+
+    const healTrackId = idempotencyCheck.trackId;
+
+    const docWithLessonId = await db
+      .select({ id: s.referenceDocs.id })
+      .from(s.referenceDocs)
+      .where(
+        and(
+          eq(s.referenceDocs.trackId, healTrackId),
+          sql`${s.referenceDocs.linkedLessonIds} @> ARRAY[${opts.lessonId}]::uuid[]`,
+        ),
+      )
+      .limit(1);
+
+    if (docWithLessonId.length === 0) {
+      // Step 7 heal: load the lesson to get objective + existing records for context.
+      const [lesson] = await db.select().from(s.lessons).where(eq(s.lessons.id, opts.lessonId));
+      if (lesson && lesson.status === 'ready') {
+        const trackId = healTrackId;
+        const spec = lesson.spec as { objective?: string };
+        const objective = spec.objective ?? 'Complete the lesson';
+
+        // Fetch existing records for this lesson to use as context for the LLM.
+        const existingRecs = await db
+          .select({ title: s.learningRecords.title, body: s.learningRecords.body })
+          .from(s.learningRecords)
+          .where(
+            and(
+              eq(s.learningRecords.trackId, trackId),
+              sql`${s.learningRecords.evidence} @> ${JSON.stringify({ lessonId: opts.lessonId })}::jsonb`,
+            ),
+          );
+
+        if (existingRecs.length > 0) {
+          const refDocOutput = await llmObject({
+            purpose: 'create-reference-doc',
+            tier: 'generator',
+            schema: createReferenceDocSchema,
+            system: REFERENCE_DOC_SYSTEM_PROMPT,
+            prompt: buildReferenceDocPrompt({
+              objective,
+              records: existingRecs,
+              promotions: [],
+            }),
+            modelOverride: opts.modelOverride,
+          });
+
+          const refContent = { sections: refDocOutput.sections };
+          await db
+            .insert(s.referenceDocs)
+            .values({
+              trackId,
+              title: refDocOutput.title,
+              docType: refDocOutput.docType,
+              content: refContent,
+              linkedLessonIds: [opts.lessonId],
+            })
+            .onConflictDoUpdate({
+              target: [s.referenceDocs.trackId, s.referenceDocs.title],
+              set: {
+                content: refContent,
+                updatedAt: new Date(),
+                linkedLessonIds: sql`
+                  CASE WHEN NOT (${s.referenceDocs.linkedLessonIds} @> ARRAY[${opts.lessonId}]::uuid[])
+                  THEN array_append(${s.referenceDocs.linkedLessonIds}, ${opts.lessonId}::uuid)
+                  ELSE ${s.referenceDocs.linkedLessonIds}
+                  END`,
+              },
+            });
+          healedReferenceDoc = true;
+        }
+      }
+    }
+
+    return { inserted: false, skipped: true, healedReferenceDoc, recordIds: [], promotedTermIds: [], cardIds: [], referenceDocId: null };
   }
 
   // ── Step 1: Load lesson ────────────────────────────────────────────────────
