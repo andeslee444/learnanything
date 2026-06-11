@@ -20,7 +20,8 @@ export type LlmPurpose =
   | 'moderation'
   | 'plan-lesson'
   | 'generate-lesson'
-  | 'distill-records';
+  | 'distill-records'
+  | 'create-reference-doc';
 
 /**
  * Single entry point for structured LLM calls.

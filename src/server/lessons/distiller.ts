@@ -21,6 +21,16 @@ import { llmObject } from '@/lib/ai';
 import { createCardForGlossaryTerm } from '@/lib/reviews';
 import { nextRecordSeq } from '@/server/tracks';
 
+// Ref doc type enum values must match the DB pgEnum 'ref_doc_type'.
+const REF_DOC_TYPES = [
+  'cheat_sheet',
+  'algorithm_flowchart',
+  'syntax_reference',
+  'routine',
+  'sequence',
+  'glossary_export',
+] as const;
+
 type Db = NodePgDatabase<typeof s>;
 // Extract the transaction type from Drizzle's generic
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -45,6 +55,67 @@ export const distillOutputSchema = z.object({
 });
 
 export type DistillOutput = z.infer<typeof distillOutputSchema>;
+
+// ── Reference-doc output schema ───────────────────────────────────────────────
+
+export const createReferenceDocSchema = z.object({
+  title: z.string().min(1).max(120),
+  docType: z.enum(REF_DOC_TYPES),
+  sections: z.array(
+    z.object({
+      heading: z.string().min(1).max(80),
+      markdown: z.string().min(1).max(2000),
+    }),
+  ).min(1).max(6),
+});
+
+export type CreateReferenceDocOutput = z.infer<typeof createReferenceDocSchema>;
+
+// ── Reference-doc prompt ──────────────────────────────────────────────────────
+
+const REFERENCE_DOC_SYSTEM_PROMPT = `You are a curriculum author generating a concise reference document for a learner's library.
+
+Create a cheat sheet or quick reference that distills the key concepts from the lesson into a reusable, printable format.
+
+Guidelines:
+- Choose docType from: cheat_sheet, algorithm_flowchart, syntax_reference, routine, sequence, glossary_export
+- Include 1-6 sections, each with a clear heading and markdown content (≤2000 chars each)
+- Be concrete: code examples, tables, and bullet lists are better than prose
+- Optimise for quick retrieval, not explanation — the learner already understands the material
+
+Your response MUST be valid JSON matching this shape:
+{
+  "title": "string ≤120 chars",
+  "docType": "cheat_sheet" | "algorithm_flowchart" | "syntax_reference" | "routine" | "sequence" | "glossary_export",
+  "sections": [  // 1-6 items
+    {
+      "heading": "string ≤80 chars",
+      "markdown": "string ≤2000 chars — use markdown freely (code blocks, tables, bullets)"
+    }
+  ]
+}`;
+
+function buildReferenceDocPrompt(opts: {
+  objective: string;
+  records: Array<{ title: string; body: string }>;
+  promotions: Array<{ term: string; definition: string }>;
+}): string {
+  const lines: string[] = [
+    `Lesson objective: ${opts.objective}`,
+    '',
+    'Learning records from this lesson:',
+  ];
+  for (const rec of opts.records) {
+    lines.push(`  - ${rec.title}: ${rec.body}`);
+  }
+  if (opts.promotions.length > 0) {
+    lines.push('', 'Glossary terms introduced:');
+    for (const p of opts.promotions) {
+      lines.push(`  - ${p.term}: ${p.definition}`);
+    }
+  }
+  return lines.join('\n');
+}
 
 // ── Prompt construction ───────────────────────────────────────────────────────
 
@@ -125,6 +196,8 @@ export interface DistillResult {
   recordIds: string[];
   promotedTermIds: string[];
   cardIds: string[];
+  /** Reference doc id (upserted in step 7), null if skipped or none generated. */
+  referenceDocId: string | null;
 }
 
 /**
@@ -164,7 +237,7 @@ export async function distillLesson(
     .limit(1);
 
   if (idempotencyCheck) {
-    return { inserted: false, skipped: true, recordIds: [], promotedTermIds: [], cardIds: [] };
+    return { inserted: false, skipped: true, recordIds: [], promotedTermIds: [], cardIds: [], referenceDocId: null };
   }
 
   // ── Step 1: Load lesson ────────────────────────────────────────────────────
@@ -382,9 +455,78 @@ export async function distillLesson(
     return { recordIds, promotedTermIds, cardIds };
   });
 
+  // ── Step 7: Reference doc — only when records were inserted ──────────────
+  let referenceDocId: string | null = null;
+
+  if (result.recordIds.length > 0) {
+    // Build the list of records and promotions to pass as context.
+    const docContextRecords = filteredRecords.map((r) => ({ title: r.title, body: r.body }));
+    const docContextPromotions = filteredPromotions.map((p) => ({ term: p.term, definition: p.definition }));
+
+    const refDocOutput = await llmObject({
+      purpose: 'create-reference-doc',
+      tier: 'generator',
+      schema: createReferenceDocSchema,
+      system: REFERENCE_DOC_SYSTEM_PROMPT,
+      prompt: buildReferenceDocPrompt({
+        objective,
+        records: docContextRecords,
+        promotions: docContextPromotions,
+      }),
+      modelOverride: opts.modelOverride,
+    });
+
+    // Upsert reference_docs by (trackId, title):
+    //   - If a doc with this title exists for the track: update content + append lessonId
+    //   - Else: insert with linkedLessonIds = [lessonId]
+    const content = { sections: refDocOutput.sections };
+
+    const [existing] = await db
+      .select({ id: s.referenceDocs.id })
+      .from(s.referenceDocs)
+      .where(
+        and(
+          eq(s.referenceDocs.trackId, trackId),
+          eq(s.referenceDocs.title, refDocOutput.title),
+        ),
+      )
+      .limit(1);
+
+    if (existing) {
+      // Update content, append lessonId to linkedLessonIds if not already present.
+      // Uses a parameterized cast: $1::uuid is compared against the array elements.
+      await db
+        .update(s.referenceDocs)
+        .set({
+          content,
+          updatedAt: new Date(),
+          linkedLessonIds: sql`
+            CASE WHEN ${opts.lessonId}::uuid = ANY(${s.referenceDocs.linkedLessonIds})
+            THEN ${s.referenceDocs.linkedLessonIds}
+            ELSE array_append(${s.referenceDocs.linkedLessonIds}, ${opts.lessonId}::uuid)
+            END`,
+        })
+        .where(eq(s.referenceDocs.id, existing.id));
+      referenceDocId = existing.id;
+    } else {
+      const [inserted] = await db
+        .insert(s.referenceDocs)
+        .values({
+          trackId,
+          title: refDocOutput.title,
+          docType: refDocOutput.docType,
+          content,
+          linkedLessonIds: [opts.lessonId],
+        })
+        .returning({ id: s.referenceDocs.id });
+      referenceDocId = inserted.id;
+    }
+  }
+
   return {
     inserted: result.recordIds.length > 0,
     skipped: false,
+    referenceDocId,
     ...result,
   };
 }

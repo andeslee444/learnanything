@@ -90,6 +90,28 @@ export const fakeOutputs: Record<LlmPurpose, unknown> = {
       { term: 'variable', definition: 'A named container for a value.' },
     ],
   },
+  'create-reference-doc': {
+    title: 'Variables and types',
+    docType: 'cheat_sheet',
+    sections: [
+      {
+        heading: 'What is a variable?',
+        markdown: 'A **variable** is a named container for a value. Use it to store data your program needs to remember.\n\n```\ncount = 5   # stores 5 in count\nname = "Alice"  # stores "Alice" in name\n```',
+      },
+      {
+        heading: 'Assignment',
+        markdown: 'The `=` operator puts a value into a variable. Reassignment replaces the old value:\n\n```\nx = 3\nx = 7  # x is now 7\n```',
+      },
+      {
+        heading: 'Naming rules',
+        markdown: '- Use lowercase with underscores: `user_count`\n- Be descriptive: `total_price` beats `t`\n- Avoid reserved words: `for`, `while`, `if`',
+      },
+      {
+        heading: 'Basic types',
+        markdown: '| Type | Example | Notes |\n|------|---------|-------|\n| int | `42` | Whole numbers |\n| float | `3.14` | Decimal numbers |\n| str | `"hello"` | Text in quotes |\n| bool | `True` | True or False |',
+      },
+    ],
+  },
   'plan-lesson': {
     objective: 'Declare and use variables to store values',
     format: 'article',

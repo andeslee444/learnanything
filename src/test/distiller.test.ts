@@ -7,6 +7,8 @@
  * 2. Dedup paths: existing term not re-promoted; duplicate title dropped.
  * 3. Umbrella-record path: LLM returns promotions-only → umbrella record created first.
  * 4. First-attempt-only win-check tally: wrong-then-right ≠ pass.
+ * 5. Reference docs (step 7): created on distill; same-title updates not duplicates;
+ *    linkedLessonIds appends; idempotent second call skips ref-doc creation.
  */
 
 import { describe, it, expect, beforeEach, afterAll, beforeAll } from 'vitest';
@@ -313,13 +315,20 @@ describe('distillLesson', () => {
       { id: 'wc2', correct: true },
     ]);
 
-    // Use a model override that returns promotions but no records
-    const { createMockLanguageModel } = await import('./mock-llm-helper');
+    // Use a sequential model override:
+    //   call 1 → distill-records: promotions-only (triggers umbrella record)
+    //   call 2 → create-reference-doc: valid reference doc
+    const { createSequentialMockLanguageModel } = await import('./mock-llm-helper');
     const promotionsOnlyOutput = JSON.stringify({
       records: [],
       glossaryPromotions: [{ term: 'assignment', definition: 'Storing a value in a variable.' }],
     });
-    const mockModel = createMockLanguageModel(promotionsOnlyOutput);
+    const refDocOutput = JSON.stringify({
+      title: 'Variables and types',
+      docType: 'cheat_sheet',
+      sections: [{ heading: 'Overview', markdown: 'Key concepts from the lesson.' }],
+    });
+    const mockModel = createSequentialMockLanguageModel([promotionsOnlyOutput, refDocOutput]);
 
     const result = await distillLesson(testDb, {
       lessonId: lesson.id,
@@ -466,6 +475,173 @@ describe('distillLesson', () => {
     expect(usedIds).toContain(e2.id);
     expect(usedIds.length).toBe(2);
   });
+
+  // ── Reference doc (step 7) ────────────────────────────────────────────────
+
+  it('reference doc: created on distill when records are inserted', async () => {
+    const { learner, track, node } = await seedWorld('refDoc-create');
+    const lesson = await seedReadyLesson(track.id, node.id);
+    await seedWinCheckAttempts(learner.id, lesson.id, [
+      { id: 'wc1', correct: true },
+      { id: 'wc2', correct: true },
+    ]);
+
+    const result = await distillLesson(testDb, { lessonId: lesson.id, learnerId: learner.id });
+
+    expect(result.inserted).toBe(true);
+    expect(result.referenceDocId).not.toBeNull();
+
+    // Verify the doc exists in DB with correct shape
+    const [doc] = await testDb
+      .select()
+      .from(s.referenceDocs)
+      .where(eq(s.referenceDocs.id, result.referenceDocId!));
+
+    expect(doc).toBeTruthy();
+    expect(doc.trackId).toBe(track.id);
+    expect(doc.title).toBeTruthy();
+    expect(doc.docType).toBeTruthy();
+    expect(doc.linkedLessonIds).toContain(lesson.id);
+
+    const content = doc.content as { sections: Array<{ heading: string; markdown: string }> };
+    expect(Array.isArray(content.sections)).toBe(true);
+    expect(content.sections.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('reference doc: same-title second lesson updates not duplicates', async () => {
+    const { learner, track, node } = await seedWorld('refDoc-update');
+    // Two lessons both produce a reference doc with the same title.
+    // lesson1 uses AI_FAKE_LLM fixtures; lesson2 uses a sequential mock with:
+    //   - a DIFFERENT record title (so it isn't deduped by the code-side gate)
+    //   - the SAME reference doc title (so step 7 hits the upsert path)
+    const lesson1 = await seedReadyLesson(track.id, node.id, 1);
+    const lesson2 = await seedReadyLesson(track.id, node.id, 2);
+
+    await seedWinCheckAttempts(learner.id, lesson1.id, [
+      { id: 'wc1', correct: true },
+      { id: 'wc2', correct: true },
+    ]);
+    await seedWinCheckAttempts(learner.id, lesson2.id, [
+      { id: 'wc1', correct: true },
+      { id: 'wc2', correct: true },
+    ]);
+
+    // lesson1 uses AI_FAKE_LLM fixture (record title: "Can use variables to store and update values")
+    const result1 = await distillLesson(testDb, { lessonId: lesson1.id, learnerId: learner.id });
+    expect(result1.referenceDocId).not.toBeNull();
+
+    // lesson2: different record title (unique) + same reference doc title
+    const { createSequentialMockLanguageModel } = await import('./mock-llm-helper');
+    const lesson2DistillOutput = JSON.stringify({
+      records: [
+        {
+          recordType: 'demonstrated_understanding',
+          title: 'Can apply variable assignment in practice',  // different from lesson1
+          body: 'The learner demonstrated ability to apply variable assignment concepts.',
+        },
+      ],
+      glossaryPromotions: [],
+    });
+    const lesson2RefDocOutput = JSON.stringify({
+      title: 'Variables and types',  // SAME title as lesson1's doc
+      docType: 'cheat_sheet',
+      sections: [{ heading: 'Quick reference', markdown: 'Updated content for lesson 2.' }],
+    });
+    const mockModel2 = createSequentialMockLanguageModel([lesson2DistillOutput, lesson2RefDocOutput]);
+
+    // The idempotency guard is per-lesson; lesson2 has different lessonId so it proceeds.
+    const result2 = await distillLesson(testDb, {
+      lessonId: lesson2.id,
+      learnerId: learner.id,
+      modelOverride: mockModel2,
+    });
+    expect(result2.inserted).toBe(true);
+    expect(result2.referenceDocId).not.toBeNull();
+
+    // Both calls should resolve to the SAME doc (same title → upsert path)
+    expect(result2.referenceDocId).toBe(result1.referenceDocId);
+
+    // Only one reference doc in the DB for this track
+    const docs = await testDb
+      .select()
+      .from(s.referenceDocs)
+      .where(eq(s.referenceDocs.trackId, track.id));
+    expect(docs).toHaveLength(1);
+  });
+
+  it('reference doc: linkedLessonIds appends on second lesson with same title', async () => {
+    const { learner, track, node } = await seedWorld('refDoc-append');
+    const lesson1 = await seedReadyLesson(track.id, node.id, 1);
+    const lesson2 = await seedReadyLesson(track.id, node.id, 2);
+
+    await seedWinCheckAttempts(learner.id, lesson1.id, [
+      { id: 'wc1', correct: true },
+      { id: 'wc2', correct: true },
+    ]);
+    await seedWinCheckAttempts(learner.id, lesson2.id, [
+      { id: 'wc1', correct: true },
+      { id: 'wc2', correct: true },
+    ]);
+
+    // lesson1 uses AI_FAKE_LLM fixtures
+    await distillLesson(testDb, { lessonId: lesson1.id, learnerId: learner.id });
+
+    // lesson2 uses a sequential mock:
+    //   call 1 → distill-records: unique record title (not deduped)
+    //   call 2 → create-reference-doc: same doc title (triggers upsert + array_append)
+    const { createSequentialMockLanguageModel } = await import('./mock-llm-helper');
+    const lesson2DistillOutput = JSON.stringify({
+      records: [
+        {
+          recordType: 'demonstrated_understanding',
+          title: 'Can apply variable assignment in practice',
+          body: 'The learner demonstrated the ability to work with variable assignment.',
+        },
+      ],
+      glossaryPromotions: [],
+    });
+    const lesson2RefDocOutput = JSON.stringify({
+      title: 'Variables and types',  // same title as lesson1
+      docType: 'cheat_sheet',
+      sections: [{ heading: 'Quick reference', markdown: 'Updated content.' }],
+    });
+    const mockModel2 = createSequentialMockLanguageModel([lesson2DistillOutput, lesson2RefDocOutput]);
+
+    await distillLesson(testDb, { lessonId: lesson2.id, learnerId: learner.id, modelOverride: mockModel2 });
+
+    const [doc] = await testDb
+      .select()
+      .from(s.referenceDocs)
+      .where(eq(s.referenceDocs.trackId, track.id));
+
+    // Both lesson ids should be in linkedLessonIds
+    expect(doc.linkedLessonIds).toContain(lesson1.id);
+    expect(doc.linkedLessonIds).toContain(lesson2.id);
+    expect(doc.linkedLessonIds).toHaveLength(2);
+  });
+
+  it('reference doc: idempotent second call does not create a reference doc', async () => {
+    const { learner, track, node } = await seedWorld('refDoc-idem');
+    const lesson = await seedReadyLesson(track.id, node.id);
+    await seedWinCheckAttempts(learner.id, lesson.id, [
+      { id: 'wc1', correct: true },
+      { id: 'wc2', correct: true },
+    ]);
+
+    await distillLesson(testDb, { lessonId: lesson.id, learnerId: learner.id });
+
+    // Second call is skipped by idempotency
+    const result2 = await distillLesson(testDb, { lessonId: lesson.id, learnerId: learner.id });
+    expect(result2.skipped).toBe(true);
+    expect(result2.referenceDocId).toBeNull();
+
+    // Still only one doc in DB
+    const docs = await testDb
+      .select()
+      .from(s.referenceDocs)
+      .where(eq(s.referenceDocs.trackId, track.id));
+    expect(docs).toHaveLength(1);
+  });
 });
 
 // ── Fixture validation ─────────────────────────────────────────────────────────
@@ -483,5 +659,23 @@ describe('distill-records fixture', () => {
     expect(parsed.data.glossaryPromotions).toHaveLength(1);
     expect(parsed.data.glossaryPromotions[0].term).toBe('variable');
     expect(parsed.data.glossaryPromotions[0].definition).toBe('A named container for a value.');
+  });
+});
+
+describe('create-reference-doc fixture', () => {
+  it('fixture parses against createReferenceDocSchema', async () => {
+    const { fakeOutputs } = await import('@/lib/ai-fixtures');
+    const { createReferenceDocSchema } = await import('@/server/lessons/distiller');
+    const parsed = createReferenceDocSchema.safeParse(fakeOutputs['create-reference-doc']);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.title).toBe('Variables and types');
+    expect(parsed.data.docType).toBe('cheat_sheet');
+    expect(parsed.data.sections.length).toBeGreaterThanOrEqual(1);
+    expect(parsed.data.sections.length).toBeLessThanOrEqual(6);
+    for (const section of parsed.data.sections) {
+      expect(section.heading.length).toBeGreaterThan(0);
+      expect(section.markdown.length).toBeGreaterThan(0);
+    }
   });
 });
