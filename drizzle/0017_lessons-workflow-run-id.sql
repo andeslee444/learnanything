@@ -1,0 +1,1 @@
+ALTER TABLE "lessons" ADD COLUMN IF NOT EXISTS "workflow_run_id" text;

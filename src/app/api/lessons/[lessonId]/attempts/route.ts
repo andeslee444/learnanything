@@ -1,13 +1,15 @@
-import { and, eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { start } from 'workflow/api';
 import { auth } from '@/lib/auth';
 import { db } from '@/lib/db';
 import * as s from '@/db/schema';
 import { getLearnerByUserId } from '@/server/learners';
-import { lessonContentSchema, type QuizItem, findAttemptItem } from '@/server/lessons/blocks';
+import { lessonContentSchema, type QuizItem, findAttemptItem, winCheckPassed } from '@/server/lessons/blocks';
 import { recordWinCheckResult } from '@/server/lessons/pipeline';
+import { distillLessonWorkflow } from '@/workflows/distill-lesson';
 
 const bodySchema = z.object({
   itemId: z.string().min(1),
@@ -76,38 +78,66 @@ export async function POST(req: Request, ctx: { params: Promise<{ lessonId: stri
     payload: { lessonId, itemId, answerIndex },
   });
 
-  // TODO(phase-5): first-attempt-only grading — distinct-ever-correct is brute-forceable; replace with the evidence-gated distiller.
-  // Win-check evaluation: count this learner's distinct CORRECT win_check answers for this lesson.
+  // Win-check evaluation: first-attempt-only grading.
+  // Pass is decided by first attempts only — re-answering is allowed for practice but
+  // does not change the verdict. The distiller is the evidence authority for mastery;
+  // recordWinCheckResult keeps its immediate cache write for snappy UX.
   if (kind === 'win_check') {
     const winCheckItemIds = content.winCheck.items.map((qi) => qi.id);
     const total = winCheckItemIds.length;
 
-    // Distinct correct items (a learner could answer same item correctly multiple times).
-    // We need distinct blockIds with correct=true.
-    const correctItems = await db
-      .selectDistinct({ blockId: s.attemptEvents.blockId })
-      .from(s.attemptEvents)
-      .where(
-        and(
-          eq(s.attemptEvents.learnerId, learner.id),
-          eq(s.attemptEvents.lessonId, lessonId),
-          eq(s.attemptEvents.eventType, 'win_check'),
-          eq(s.attemptEvents.correct, true),
-        ),
-      );
-    // Only count items that are actually in the win-check (guard against stale data).
-    const distinctCorrect = correctItems.filter((r) => r.blockId && winCheckItemIds.includes(r.blockId)).length;
-    const allAnswered = distinctCorrect >= total;
+    // Compute first-attempt-only correctness with a single DISTINCT ON query.
+    // ORDER BY block_id, created_at ASC, id ASC ensures deterministic selection
+    // even for rows inserted in the same millisecond (microsecond-safe).
+    const firstAttempts = await db.execute(sql`
+      SELECT DISTINCT ON (block_id) block_id, correct
+      FROM attempt_events
+      WHERE learner_id = ${learner.id} AND lesson_id = ${lessonId} AND event_type = 'win_check'
+      ORDER BY block_id, created_at ASC, id ASC
+    `);
+    // Rows returned: { block_id: string, correct: boolean | null }[]
+    type FirstAttemptRow = { block_id: string; correct: boolean | null };
+    const firstAttemptRows = firstAttempts.rows as FirstAttemptRow[];
 
+    let firstAttemptCorrect = 0;
+    for (const row of firstAttemptRows) {
+      if (!row.block_id || !winCheckItemIds.includes(row.block_id)) continue;
+      if (row.correct === true) firstAttemptCorrect++;
+    }
+
+    const allAnsweredFirstTime = winCheckItemIds.every((id) =>
+      firstAttemptRows.some((r) => r.block_id === id),
+    );
+
+    // Pass verdict is based on first-attempt scores only.
+    // We only evaluate once all items have a first attempt recorded.
     let winCheckResult: { answered: number; total: number; passed?: boolean } = {
-      answered: distinctCorrect,
+      answered: firstAttemptCorrect,
       total,
     };
 
-    if (allAnswered) {
-      const result = await recordWinCheckResult(db, lessonId, distinctCorrect, total);
-      winCheckResult = { answered: distinctCorrect, total, passed: result.passed };
+    if (allAnsweredFirstTime) {
+      const passed = winCheckPassed(firstAttemptCorrect, total);
+      if (passed) {
+        // recordWinCheckResult keeps its immediate cache write for snappy UX.
+        // The distiller is the evidence authority; it runs after this.
+        await recordWinCheckResult(db, lessonId, firstAttemptCorrect, total);
+        winCheckResult = { answered: firstAttemptCorrect, total, passed: true };
+
+        // Trigger the distill workflow fire-and-forget AFTER recordWinCheckResult.
+        // Errors are caught and logged; they do not affect the HTTP response.
+        start(distillLessonWorkflow, [lessonId, learner.id]).catch((err) =>
+          console.error('distillLessonWorkflow start failed', err),
+        );
+      } else {
+        // First attempts failed — pass stays false permanently.
+        // Pass is decided by first attempts — by design, no retry path to passed;
+        // the retry panel is practice only (encourages re-engagement, not re-grading).
+        winCheckResult = { answered: firstAttemptCorrect, total, passed: false };
+      }
     }
+    // If not all items have a first attempt yet, winCheck has no passed field
+    // so the client shows progress without triggering the win panel.
 
     return NextResponse.json({
       correct,

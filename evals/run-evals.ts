@@ -30,6 +30,7 @@ import { createLessonRow, stagePlan, stageResearch, stageGenerate } from '../src
 import { lessonContentSchema } from '../src/server/lessons/blocks.js';
 import { validateLessonContent } from '../src/server/lessons/validate.js';
 import { stripContentAnswerKey } from '../src/app/api/lessons/[lessonId]/route.js';
+import { distillLesson } from '../src/server/lessons/distiller.js';
 
 // ── flags ─────────────────────────────────────────────────────────────────────
 
@@ -183,6 +184,10 @@ interface CaseChecks {
   hasWorkedExample: boolean;
   hasAnimatedDiagram: boolean;
   noAnswerKeyInGet: boolean;
+  // Phase 5: distiller checks
+  distillerProducesRecords: boolean;
+  glossaryPromoted: boolean;
+  referenceDocCreated: boolean;
 }
 
 interface CaseResult {
@@ -211,6 +216,9 @@ async function runCase(db: Db, c: EvalCase): Promise<CaseResult> {
     hasWorkedExample: false,
     hasAnimatedDiagram: false,
     noAnswerKeyInGet: false,
+    distillerProducesRecords: false,
+    glossaryPromoted: false,
+    referenceDocCreated: false,
   };
 
   let userId: string | null = null;
@@ -273,6 +281,46 @@ async function runCase(db: Db, c: EvalCase): Promise<CaseResult> {
       // Simulate what the GET handler does — deep-clone and strip answer key fields.
       const wireContent = stripContentAnswerKey(delivered.content);
       checks.noAnswerKeyInGet = !hasAnswerKey(wireContent);
+
+      // ── Phase 5: distiller checks ──────────────────────────────────────────
+      // Seed two correct first-attempt win_check events for the win-check item ids
+      // (the distiller reads first-attempt events for the lesson's win-check items).
+      // The lesson was generated with fixture content — win-check items have ids 'wc1' and 'wc2'.
+      // We insert the events here (after pipeline) to satisfy the distiller's evidence gate.
+      try {
+        if (delivered.status === 'ready') {
+          // Insert first-attempt-correct events for both win-check items
+          const winCheckItemIds = ['wc1', 'wc2'];
+          for (const itemId of winCheckItemIds) {
+            await db.insert(s.attemptEvents).values({
+              learnerId: fixture.learnerId,
+              lessonId: lesson.id,
+              blockId: itemId,
+              eventType: 'win_check',
+              correct: true,
+              payload: {},
+            });
+          }
+
+          // Run the distiller directly (fake mode — no real LLM calls)
+          const distillResult = await distillLesson(db, {
+            lessonId: lesson.id,
+            learnerId: fixture.learnerId,
+          });
+
+          // Check 10: distillerProducesRecords — at least one learning record inserted
+          checks.distillerProducesRecords = distillResult.inserted && distillResult.recordIds.length > 0;
+
+          // Check 11: glossaryPromoted — at least one glossary term promoted (fixture promotes 'variable')
+          checks.glossaryPromoted = distillResult.promotedTermIds.length > 0;
+
+          // Check 12: referenceDocCreated — a reference doc was created
+          checks.referenceDocCreated = distillResult.referenceDocId !== null;
+        }
+      } catch (distillErr) {
+        console.error(`[${c.id}] distiller check exception:`, distillErr);
+        // Checks remain false
+      }
     }
   } catch (err) {
     console.error(`[${c.id}] exception:`, err);
