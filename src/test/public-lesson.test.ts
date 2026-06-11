@@ -12,19 +12,21 @@
  *  U6. Returned content has NO correctIndex or explanation fields (answer-key strip).
  *
  * Report endpoint (via createReportHandler + testDb):
- *  R1. Unknown slug → 404.
+ *  R1. Unknown slug → 200 {ok:true}, no alert (anti-oracle).
  *  R2. Invalid reason → 400.
- *  R3. Valid report → 200, report_count incremented.
- *  R4. 3rd report on 'approved' row → moderationStatus flips to 'pending'.
- *  R5. Report on already-'removed' row → 200, count increments, status NOT changed.
+ *  R3. Valid report on approved row → 200, report_count incremented, alert fired.
+ *  R4. 3rd report on 'approved' row → status still 'approved' (no auto-flip),
+ *      report_count = 3, alertFounder called three times total.
+ *  R5. Report on 'removed' row → 200, count NOT incremented, NO alert.
+ *  R5b. Report on 'pending' row → 200, count NOT incremented, NO alert.
  *  R6. Rate-limit: 4th report from same IP → 429.
- *  R7. Alert: spy on alertFounder — content-free payload (slug + reason only, no IDs).
+ *  R7. Alert payload is EXACTLY {slug, reason} — no extra keys.
  *
- * Admin queue extension:
- *  A1. GET /api/admin/queue includes sharedItems with reported/pending rows.
- *  A2. POST republish → status 'approved', reportCount reset to 0.
- *  A3. POST take_down → status 'removed'.
- *  A4. Admin gate: non-admin POST → 404.
+ * Admin queue extension (via createAdminQueueHandlers + real handlers):
+ *  A1. GET includes sharedItems with reported + pending rows; excludes clean row.
+ *  A2. POST {sharedLessonId, action:'republish'} → 200; DB shows approved + reportCount 0.
+ *  A3. POST {sharedLessonId, action:'take_down'} → 200; DB shows removed.
+ *  A4. Non-admin session → 404; no-session → 404.
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
@@ -275,10 +277,15 @@ describe('report endpoint', () => {
     });
   }
 
-  it('R1. unknown slug → 404', async () => {
+  it('R1. unknown slug → 200 {ok:true}, no alert (anti-oracle: must not reveal slug existence)', async () => {
+    const alertSpy = vi.spyOn(alertsModule, 'alertFounder');
     const req = makeReportRequest('totally-unknown-00000000', { reason: 'inaccurate' });
     const res = await handler(req, { params: Promise.resolve({ slug: 'totally-unknown-00000000' }) });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({ ok: true });
+    // No alert fired — slug does not exist
+    expect(alertSpy).not.toHaveBeenCalled();
   });
 
   it('R2. invalid reason → 400', async () => {
@@ -291,10 +298,12 @@ describe('report endpoint', () => {
     expect(res.status).toBe(400);
   });
 
-  it('R3. valid report → 200, report_count incremented', async () => {
+  it('R3. valid report on approved row → 200, report_count incremented, alert fired', async () => {
     const { track } = await seedWorld('report-r3');
     const lesson = await seedLesson(track.id, 1);
     const shared = await seedSharedLesson(lesson.id, { reportCount: 0 });
+
+    const alertSpy = vi.spyOn(alertsModule, 'alertFounder');
 
     const req = makeReportRequest(shared.slug, { reason: 'inaccurate' }, '10.0.0.3');
     const res = await handler(req, { params: Promise.resolve({ slug: shared.slug }) });
@@ -305,29 +314,44 @@ describe('report endpoint', () => {
       .from(s.sharedLessons)
       .where(eq(s.sharedLessons.id, shared.id));
     expect(updated.reportCount).toBe(1);
+    expect(alertSpy).toHaveBeenCalledOnce();
   });
 
-  it('R4. 3rd report on "approved" row → moderationStatus flips to "pending"', async () => {
+  it('R4. 3rd report on "approved" row → status still approved (no auto-flip), count=3, three alerts', async () => {
     const { track } = await seedWorld('report-r4');
     const lesson = await seedLesson(track.id, 1);
-    const shared = await seedSharedLesson(lesson.id, { reportCount: 2, moderationStatus: 'approved' });
+    const shared = await seedSharedLesson(lesson.id, { reportCount: 0, moderationStatus: 'approved' });
 
-    const req = makeReportRequest(shared.slug, { reason: 'inappropriate' }, '10.0.0.4');
-    const res = await handler(req, { params: Promise.resolve({ slug: shared.slug }) });
-    expect(res.status).toBe(200);
+    const alertSpy = vi.spyOn(alertsModule, 'alertFounder');
+
+    // Fire 3 reports from 3 different IPs (so rate-limit doesn't interfere)
+    for (let i = 0; i < 3; i++) {
+      const req = makeReportRequest(shared.slug, { reason: 'inappropriate' }, `10.1.0.${i}`);
+      const res = await handler(req, { params: Promise.resolve({ slug: shared.slug }) });
+      expect(res.status).toBe(200);
+    }
 
     const [updated] = await testDb
-      .select({ moderationStatus: s.sharedLessons.moderationStatus, reportCount: s.sharedLessons.reportCount })
+      .select({
+        moderationStatus: s.sharedLessons.moderationStatus,
+        reportCount: s.sharedLessons.reportCount,
+      })
       .from(s.sharedLessons)
       .where(eq(s.sharedLessons.id, shared.id));
-    expect(updated.moderationStatus).toBe('pending');
+
+    // Status must NOT have been auto-flipped (decision 2026-06-11)
+    expect(updated.moderationStatus).toBe('approved');
     expect(updated.reportCount).toBe(3);
+    // All three triggered alerts
+    expect(alertSpy).toHaveBeenCalledTimes(3);
   });
 
-  it('R5. report on already-"removed" row → 200, count increments, status stays "removed"', async () => {
+  it('R5. report on "removed" row → 200, count NOT incremented, NO alert', async () => {
     const { track } = await seedWorld('report-r5');
     const lesson = await seedLesson(track.id, 1);
     const shared = await seedSharedLesson(lesson.id, { reportCount: 5, moderationStatus: 'removed' });
+
+    const alertSpy = vi.spyOn(alertsModule, 'alertFounder');
 
     const req = makeReportRequest(shared.slug, { reason: 'other' }, '10.0.0.5');
     const res = await handler(req, { params: Promise.resolve({ slug: shared.slug }) });
@@ -337,10 +361,31 @@ describe('report endpoint', () => {
       .select({ moderationStatus: s.sharedLessons.moderationStatus, reportCount: s.sharedLessons.reportCount })
       .from(s.sharedLessons)
       .where(eq(s.sharedLessons.id, shared.id));
-    // Status not changed (was already 'removed')
+    // Status unchanged
     expect(updated.moderationStatus).toBe('removed');
-    // Count incremented
-    expect(updated.reportCount).toBe(6);
+    // Count NOT incremented (no side effects for non-approved rows)
+    expect(updated.reportCount).toBe(5);
+    // No alert
+    expect(alertSpy).not.toHaveBeenCalled();
+  });
+
+  it('R5b. report on "pending" row → 200, count NOT incremented, NO alert', async () => {
+    const { track } = await seedWorld('report-r5b');
+    const lesson = await seedLesson(track.id, 1);
+    const shared = await seedSharedLesson(lesson.id, { reportCount: 2, moderationStatus: 'pending' });
+
+    const alertSpy = vi.spyOn(alertsModule, 'alertFounder');
+
+    const req = makeReportRequest(shared.slug, { reason: 'inaccurate' }, '10.0.0.8');
+    const res = await handler(req, { params: Promise.resolve({ slug: shared.slug }) });
+    expect(res.status).toBe(200);
+
+    const [updated] = await testDb
+      .select({ reportCount: s.sharedLessons.reportCount })
+      .from(s.sharedLessons)
+      .where(eq(s.sharedLessons.id, shared.id));
+    expect(updated.reportCount).toBe(2); // unchanged
+    expect(alertSpy).not.toHaveBeenCalled();
   });
 
   it('R6. rate-limit: 4th report from same IP within window → 429', async () => {
@@ -363,7 +408,7 @@ describe('report endpoint', () => {
     expect(res.status).toBe(429);
   });
 
-  it('R7. alertFounder called with content-free payload (slug + reason, no internal IDs)', async () => {
+  it('R7. alertFounder payload is EXACTLY {slug, reason} — no extra keys', async () => {
     const { track } = await seedWorld('report-r7');
     const lesson = await seedLesson(track.id, 1);
     const shared = await seedSharedLesson(lesson.id);
@@ -376,117 +421,198 @@ describe('report endpoint', () => {
     expect(alertSpy).toHaveBeenCalledOnce();
     const [kind, payload] = alertSpy.mock.calls[0];
     expect(kind).toBe('report');
-    // Payload must be content-free: only slug + reason
     expect(payload).toHaveProperty('slug', shared.slug);
     expect(payload).toHaveProperty('reason', 'copyright');
-    // No internal DB IDs
-    expect(Object.keys(payload)).toEqual(expect.arrayContaining(['slug', 'reason']));
-    expect(Object.keys(payload)).not.toContain('id');
-    expect(Object.keys(payload)).not.toContain('lessonId');
+    // Exact key set — no internal IDs or extra fields
+    expect(Object.keys(payload as Record<string, unknown>).sort()).toEqual(['reason', 'slug']);
   });
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
-// A1–A4: Admin queue extension
-//
-// These tests validate the DB logic that backs the admin queue, following the
-// same pattern as admin-queue.test.ts (direct DB assertions, not via route handler
-// which hardcodes the global `db`).
-// A4 tests the admin gate (ADMIN_EMAILS) via the route's exported helper.
+// A1–A4: Admin queue extension — REAL handlers via createAdminQueueHandlers factory
 // ════════════════════════════════════════════════════════════════════════════════
 
-describe('admin queue — shared lesson entries', () => {
+const ADMIN_TEST_EMAIL = 'admin-queue-test@learnanything.test';
+
+describe('admin queue — shared lesson entries (real handlers)', () => {
   beforeAll(async () => {
     await resetDb();
+    process.env.ADMIN_EMAILS = ADMIN_TEST_EMAIL;
   });
 
-  it('A1. query scope: reported/pending rows appear; clean row excluded', async () => {
+  afterEach(() => {
+    vi.resetModules();
+  });
+
+  async function getHandlers() {
+    // Mock auth + next/headers before importing the factory so the module uses
+    // the mocked versions (same technique as account.test.ts:645-672).
+    vi.doMock('@/lib/auth', () => ({
+      auth: {
+        api: {
+          getSession: vi.fn().mockResolvedValue({
+            user: { id: 'admin-test-user', email: ADMIN_TEST_EMAIL },
+          }),
+        },
+      },
+    }));
+    vi.doMock('next/headers', () => ({
+      headers: vi.fn().mockResolvedValue(new Headers()),
+    }));
+    const { createAdminQueueHandlers } = await import('@/app/api/admin/queue/route');
+    const { GET, POST } = createAdminQueueHandlers(testDb);
+    return { GET, POST };
+  }
+
+  async function getNonAdminHandlers(email = 'hacker@evil.com') {
+    vi.doMock('@/lib/auth', () => ({
+      auth: {
+        api: {
+          getSession: vi.fn().mockResolvedValue({
+            user: { id: 'non-admin-user', email },
+          }),
+        },
+      },
+    }));
+    vi.doMock('next/headers', () => ({
+      headers: vi.fn().mockResolvedValue(new Headers()),
+    }));
+    const { createAdminQueueHandlers } = await import('@/app/api/admin/queue/route');
+    const { GET, POST } = createAdminQueueHandlers(testDb);
+    return { GET, POST };
+  }
+
+  async function getNoSessionHandlers() {
+    vi.doMock('@/lib/auth', () => ({
+      auth: {
+        api: {
+          getSession: vi.fn().mockResolvedValue(null),
+        },
+      },
+    }));
+    vi.doMock('next/headers', () => ({
+      headers: vi.fn().mockResolvedValue(new Headers()),
+    }));
+    const { createAdminQueueHandlers } = await import('@/app/api/admin/queue/route');
+    const { GET, POST } = createAdminQueueHandlers(testDb);
+    return { GET, POST };
+  }
+
+  it('A1. GET sharedItems includes reported + pending rows; excludes clean row', async () => {
+    const { GET } = await getHandlers();
+
     const { track } = await seedWorld('admin-a1');
     const lesson = await seedLesson(track.id, 1);
-
-    // A row with reportCount = 1 (should appear in query)
     const reported = await seedSharedLesson(lesson.id, { reportCount: 1, moderationStatus: 'approved' });
 
-    // A row with moderationStatus = 'pending' (should appear in query)
     const { track: track2 } = await seedWorld('admin-a1b');
     const lesson2 = await seedLesson(track2.id, 1);
     const pending = await seedSharedLesson(lesson2.id, { moderationStatus: 'pending', reportCount: 0 });
 
-    // A row with no reports and approved (should NOT appear in query)
     const { track: track3 } = await seedWorld('admin-a1c');
     const lesson3 = await seedLesson(track3.id, 1);
     const clean = await seedSharedLesson(lesson3.id, { moderationStatus: 'approved', reportCount: 0 });
 
-    // Execute the same query the admin route uses
-    const { or, gte, eq: eqOp, desc: descOp } = await import('drizzle-orm');
-    const rows = await testDb
-      .select({ id: s.sharedLessons.id })
-      .from(s.sharedLessons)
-      .where(
-        or(
-          gte(s.sharedLessons.reportCount, 1),
-          eqOp(s.sharedLessons.moderationStatus, 'pending'),
-        ),
-      )
-      .orderBy(descOp(s.sharedLessons.createdAt));
+    const res = await GET();
+    expect(res.status).toBe(200);
+    const body = await res.json() as { sharedItems: { id: string }[] };
 
-    const ids = rows.map((r) => r.id);
+    const ids = body.sharedItems.map((r) => r.id);
     expect(ids).toContain(reported.id);
     expect(ids).toContain(pending.id);
     expect(ids).not.toContain(clean.id);
+
+    vi.resetModules();
   });
 
-  it('A2. republish action → status approved, reportCount reset', async () => {
+  it('A2. POST republish → 200; DB shows approved + reportCount 0', async () => {
+    const { POST } = await getHandlers();
+
     const { track } = await seedWorld('admin-a2');
     const lesson = await seedLesson(track.id, 1);
     const shared = await seedSharedLesson(lesson.id, { moderationStatus: 'pending', reportCount: 3 });
 
-    // Execute the same update the admin route POST does
-    await testDb
-      .update(s.sharedLessons)
-      .set({ moderationStatus: 'approved', reportCount: 0 })
-      .where(eq(s.sharedLessons.id, shared.id));
+    const req = new NextRequest('http://localhost/api/admin/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sharedLessonId: shared.id, action: 'republish' }),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
 
     const [updated] = await testDb
-      .select({ moderationStatus: s.sharedLessons.moderationStatus, reportCount: s.sharedLessons.reportCount })
+      .select({
+        moderationStatus: s.sharedLessons.moderationStatus,
+        reportCount: s.sharedLessons.reportCount,
+      })
       .from(s.sharedLessons)
       .where(eq(s.sharedLessons.id, shared.id));
     expect(updated.moderationStatus).toBe('approved');
     expect(updated.reportCount).toBe(0);
+
+    vi.resetModules();
   });
 
-  it('A3. take_down action → status removed', async () => {
+  it('A3. POST take_down → 200; DB shows removed', async () => {
+    const { POST } = await getHandlers();
+
     const { track } = await seedWorld('admin-a3');
     const lesson = await seedLesson(track.id, 1);
     const shared = await seedSharedLesson(lesson.id, { moderationStatus: 'approved', reportCount: 2 });
 
-    // Execute the same update the admin route POST does
-    await testDb
-      .update(s.sharedLessons)
-      .set({ moderationStatus: 'removed' })
-      .where(eq(s.sharedLessons.id, shared.id));
+    const req = new NextRequest('http://localhost/api/admin/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sharedLessonId: shared.id, action: 'take_down' }),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
 
     const [updated] = await testDb
       .select({ moderationStatus: s.sharedLessons.moderationStatus })
       .from(s.sharedLessons)
       .where(eq(s.sharedLessons.id, shared.id));
     expect(updated.moderationStatus).toBe('removed');
+
+    vi.resetModules();
   });
 
-  it('A4. admin gate: ADMIN_EMAILS denies non-listed emails', async () => {
-    const orig = process.env.ADMIN_EMAILS;
-    process.env.ADMIN_EMAILS = 'admin@test.com';
+  it('A4a. non-admin session email → 404 on POST, row unchanged', async () => {
+    const { POST } = await getNonAdminHandlers();
+
+    const { track } = await seedWorld('admin-a4');
+    const lesson = await seedLesson(track.id, 1);
+    const shared = await seedSharedLesson(lesson.id, { moderationStatus: 'approved', reportCount: 0 });
+
+    const req = new NextRequest('http://localhost/api/admin/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sharedLessonId: shared.id, action: 'take_down' }),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(404);
+
+    // Row must be unchanged
+    const [after] = await testDb
+      .select({ moderationStatus: s.sharedLessons.moderationStatus })
+      .from(s.sharedLessons)
+      .where(eq(s.sharedLessons.id, shared.id));
+    expect(after.moderationStatus).toBe('approved');
+
     vi.resetModules();
-    try {
-      const { getAdminEmailsForTest } = await import('@/app/api/admin/queue/route');
-      const emails = getAdminEmailsForTest();
-      // Admin is allowed
-      expect(emails.has('admin@test.com')).toBe(true);
-      // Non-admin is denied
-      expect(emails.has('hacker@evil.com')).toBe(false);
-    } finally {
-      process.env.ADMIN_EMAILS = orig;
-      vi.resetModules();
-    }
+  });
+
+  it('A4b. no session → 404 on POST', async () => {
+    const { POST } = await getNoSessionHandlers();
+
+    const req = new NextRequest('http://localhost/api/admin/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sharedLessonId: 'any-id', action: 'take_down' }),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(404);
+
+    vi.resetModules();
   });
 });

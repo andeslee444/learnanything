@@ -34,7 +34,6 @@ import { ArticleSection } from '@/components/lesson/article-section';
 import { GlossaryCallout } from '@/components/lesson/glossary-callout';
 import { FlashcardDeck } from '@/components/lesson/flashcard-deck';
 import { AnimatedDiagram } from '@/components/lesson/animated-diagram';
-import { WorkedExample } from '@/components/lesson/worked-example';
 import { ReportButton } from '@/components/lesson/report-button';
 
 export const dynamic = 'force-dynamic';
@@ -235,9 +234,12 @@ export default async function PublicLessonPage(
             );
           }
           if (block.type === 'worked_example') {
-            // Render steps/problem statically; the completionItem (quiz) is omitted
-            // for the public page (it requires auth wiring for submission).
-            // Instead show a sign-up note.
+            // Static render: problem + steps are shown read-only.
+            // The interactive WorkedExample component is NOT mounted here — it
+            // POSTs to /api/lessons/:id/attempts which 401s for unauthenticated
+            // visitors, producing silent failures. The completionItem is shown
+            // via StaticQuizBlock with a "Sign up to practise" note, consistent
+            // with the page's own static-rendering pattern for quiz/win-check blocks.
             const we = block as {
               type: 'worked_example';
               problem: string;
@@ -245,12 +247,39 @@ export default async function PublicLessonPage(
               completionItem: QuizItemPublic;
             };
             return (
-              <WorkedExample
+              <div
                 key={idx}
-                lessonId="public"
-                block={we as Parameters<typeof WorkedExample>[0]['block']}
-                liveRef={{ current: null }}
-              />
+                data-testid="worked-example"
+                className="mt-6 rounded-xl border border-sky-200 bg-sky-50 px-6 py-5"
+              >
+                <p className="text-xs font-medium uppercase tracking-wide text-sky-500 mb-3">
+                  Worked example
+                </p>
+                {/* Problem statement */}
+                <p className="text-base font-medium text-ink-900 mb-4">{we.problem}</p>
+                {/* Steps — all shown (no reveal progression on public page) */}
+                <ol className="space-y-3 mb-4">
+                  {we.steps.map((step, i) => (
+                    <li
+                      key={i}
+                      data-testid={`we-step-${i}`}
+                      className="flex gap-3 rounded-lg border border-sky-200 bg-white px-4 py-3"
+                    >
+                      <span className="flex-shrink-0 flex h-6 w-6 items-center justify-center rounded-full bg-sky-100 text-xs font-semibold text-sky-600">
+                        {i + 1}
+                      </span>
+                      <span className="text-sm text-ink-900">{step.text}</span>
+                    </li>
+                  ))}
+                </ol>
+                {/* Completion item — static, no submission */}
+                {we.completionItem && (
+                  <StaticQuizBlock
+                    items={[we.completionItem]}
+                    label="Check your understanding"
+                  />
+                )}
+              </div>
             );
           }
           if (block.type === 'animated_diagram') {

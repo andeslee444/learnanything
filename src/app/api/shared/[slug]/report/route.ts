@@ -6,20 +6,28 @@
  * Body: { reason: 'inaccurate' | 'inappropriate' | 'copyright' | 'other' }
  * No free text — content-free discipline.
  *
- * Effects:
+ * Effects (only when an APPROVED row exists):
  *  1. Increment shared_lessons.report_count
  *  2. alertFounder('report', { slug, reason }) — content-free payload
- *  3. When new count >= 3 and current status = 'approved' → set status 'pending'
- *     (auto-unpublish pending review; cheap brigade-resistant threshold)
+ *
+ * NOTE: auto-unpublish was weaponizable (spoofable reporter identity);
+ * reports are alert+queue signals only — the FOUNDER decides takedowns.
+ * (decision 2026-06-11)
  *
  * Rate-limit: in-process map, 3 reports per hour per IP.
- *   IP = first value of x-forwarded-for, fallback 'unknown'.
+ *   IP = LAST entry of x-forwarded-for (platform-appended on Vercel, trustworthy).
+ *   Using the LAST (not first) because the client controls earlier entries;
+ *   the platform appends its own observed IP at the end.
  *
- * Status codes:
- *  200 — report recorded
- *  400 — invalid/missing reason
- *  404 — slug not found
- *  429 — rate-limited
+ * Uniform response policy:
+ *   400 — invalid/missing reason (leaks nothing slug-specific)
+ *   429 — rate-limited (leaks nothing slug-specific)
+ *   200 — everything else:
+ *     - approved row → increment + alert
+ *     - hidden/pending/removed row → no side effects, same 200
+ *     - absent slug → no side effects, same 200
+ *   "uniform response — the report endpoint must not be a slug-existence oracle
+ *    (the public page 404s uniformly too)" (decision 2026-06-11)
  */
 
 import { eq, sql } from 'drizzle-orm';
@@ -82,8 +90,14 @@ export function createReportHandler(dbInstance: typeof db) {
     const { slug } = await ctx.params;
 
     // ── IP extraction for rate-limiting ──────────────────────────────────────
+    // Use the LAST entry of x-forwarded-for: on Vercel (and most CDNs) the
+    // platform appends its own observed IP at the tail, making it trustworthy.
+    // The client controls all earlier entries — using [0] would let an attacker
+    // spoof any IP by setting the header themselves.
     const forwarded = req.headers.get('x-forwarded-for');
-    const ip = forwarded ? forwarded.split(',')[0].trim() : 'unknown';
+    const ip = forwarded
+      ? forwarded.split(',').map((s) => s.trim()).filter(Boolean).pop() ?? 'unknown'
+      : 'unknown';
 
     // ── Rate-limit check ─────────────────────────────────────────────────────
     if (isRateLimited(ip)) {
@@ -107,40 +121,29 @@ export function createReportHandler(dbInstance: typeof db) {
     }
 
     // ── Slug lookup ───────────────────────────────────────────────────────────
+    // uniform response — the report endpoint must not be a slug-existence oracle
+    // (the public page 404s uniformly too). Only act when an APPROVED row exists.
     const [row] = await dbInstance
       .select({
         id: s.sharedLessons.id,
         moderationStatus: s.sharedLessons.moderationStatus,
-        reportCount: s.sharedLessons.reportCount,
       })
       .from(s.sharedLessons)
       .where(eq(s.sharedLessons.slug, slug));
 
-    if (!row) {
-      return NextResponse.json({ error: 'not_found' }, { status: 404 });
+    // Non-existent, pending, or removed rows: no side effects, same 200.
+    if (!row || row.moderationStatus !== 'approved') {
+      return NextResponse.json({ ok: true });
     }
 
     // ── Increment report_count ────────────────────────────────────────────────
     // Use SQL increment so concurrent reports don't collide on a stale read.
-    const AUTO_PENDING_THRESHOLD = 3;
-
-    const newCountResult = await dbInstance
+    // No auto-unpublish: auto-unpublish was weaponizable (spoofable reporter
+    // identity); reports are alert+queue signals only (decision 2026-06-11).
+    await dbInstance
       .update(s.sharedLessons)
       .set({ reportCount: sql`${s.sharedLessons.reportCount} + 1` })
-      .where(eq(s.sharedLessons.id, row.id))
-      .returning({ reportCount: s.sharedLessons.reportCount });
-
-    const newCount = newCountResult[0]?.reportCount ?? row.reportCount + 1;
-
-    // ── Auto-unpublish at threshold ────────────────────────────────────────────
-    // Only flip 'approved' → 'pending'; don't touch 'removed'/'pending' rows.
-    // Comment: cheap brigade-resistant threshold.
-    if (newCount >= AUTO_PENDING_THRESHOLD && row.moderationStatus === 'approved') {
-      await dbInstance
-        .update(s.sharedLessons)
-        .set({ moderationStatus: 'pending' })
-        .where(eq(s.sharedLessons.id, row.id));
-    }
+      .where(eq(s.sharedLessons.id, row.id));
 
     // ── Alert founder — content-free payload ─────────────────────────────────
     alertFounder('report', { slug, reason: body.reason });
