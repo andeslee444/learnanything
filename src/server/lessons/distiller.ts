@@ -196,6 +196,7 @@ export async function distillLesson(
   // Fetch win_check attempt events for this learner+lesson.
   const attemptRows = await db
     .select({
+      id: s.attemptEvents.id,
       blockId: s.attemptEvents.blockId,
       correct: s.attemptEvents.correct,
       createdAt: s.attemptEvents.createdAt,
@@ -209,17 +210,20 @@ export async function distillLesson(
       ),
     );
 
-  // Collect all event ids for the evidence jsonb (used in FK FK field).
-  const attemptEventIds: string[] = [];
-  // group rows by itemId and find the earliest (first attempt)
-  const byItem = new Map<string, { correct: boolean | null; createdAt: Date }>();
+  // Group rows by itemId and find the earliest (first attempt) per item.
+  // The id tiebreaker (used in the route's DISTINCT ON) is not needed here
+  // because we do an in-process scan and order by createdAt.
+  const byItem = new Map<string, { id: string; correct: boolean | null; createdAt: Date }>();
   for (const row of attemptRows) {
     if (!row.blockId) continue;
     const existing = byItem.get(row.blockId);
     if (!existing || row.createdAt < existing.createdAt) {
-      byItem.set(row.blockId, { correct: row.correct, createdAt: row.createdAt });
+      byItem.set(row.blockId, { id: row.id, correct: row.correct, createdAt: row.createdAt });
     }
   }
+
+  // Collect the win_check event ids actually used as evidence (first attempt per item).
+  const attemptEventIds: string[] = Array.from(byItem.values()).map((v) => v.id);
 
   // Build evidence summary
   const evidenceSummary = winCheckItems.map((item) => {

@@ -1,14 +1,15 @@
-import { and, eq, min } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { start } from 'workflow/api';
 import { auth } from '@/lib/auth';
 import { db } from '@/lib/db';
 import * as s from '@/db/schema';
 import { getLearnerByUserId } from '@/server/learners';
 import { lessonContentSchema, type QuizItem, findAttemptItem, winCheckPassed } from '@/server/lessons/blocks';
 import { recordWinCheckResult } from '@/server/lessons/pipeline';
-import { distillLesson } from '@/server/lessons/distiller';
+import { distillLessonWorkflow } from '@/workflows/distill-lesson';
 
 const bodySchema = z.object({
   itemId: z.string().min(1),
@@ -85,53 +86,27 @@ export async function POST(req: Request, ctx: { params: Promise<{ lessonId: stri
     const winCheckItemIds = content.winCheck.items.map((qi) => qi.id);
     const total = winCheckItemIds.length;
 
-    // Compute first-attempt-only correctness:
-    // For each win_check item, find the earliest attempt_event (min created_at per itemId),
-    // then count how many of those first attempts were correct.
-    const firstAttemptRows = await db
-      .select({
-        blockId: s.attemptEvents.blockId,
-        minCreatedAt: min(s.attemptEvents.createdAt),
-      })
-      .from(s.attemptEvents)
-      .where(
-        and(
-          eq(s.attemptEvents.learnerId, learner.id),
-          eq(s.attemptEvents.lessonId, lessonId),
-          eq(s.attemptEvents.eventType, 'win_check'),
-        ),
-      )
-      .groupBy(s.attemptEvents.blockId);
+    // Compute first-attempt-only correctness with a single DISTINCT ON query.
+    // ORDER BY block_id, created_at ASC, id ASC ensures deterministic selection
+    // even for rows inserted in the same millisecond (microsecond-safe).
+    const firstAttempts = await db.execute(sql`
+      SELECT DISTINCT ON (block_id) block_id, correct
+      FROM attempt_events
+      WHERE learner_id = ${learner.id} AND lesson_id = ${lessonId} AND event_type = 'win_check'
+      ORDER BY block_id, created_at ASC, id ASC
+    `);
+    // Rows returned: { block_id: string, correct: boolean | null }[]
+    type FirstAttemptRow = { block_id: string; correct: boolean | null };
+    const firstAttemptRows = firstAttempts.rows as FirstAttemptRow[];
 
-    // For each item, look up the correct value at the min createdAt.
-    // We do this by fetching each first-attempt row.
     let firstAttemptCorrect = 0;
-    for (const { blockId, minCreatedAt } of firstAttemptRows) {
-      if (!blockId || !winCheckItemIds.includes(blockId)) continue;
-      if (!minCreatedAt) continue;
-
-      // Fetch the first attempt row to check correctness
-      const [firstRow] = await db
-        .select({ correct: s.attemptEvents.correct })
-        .from(s.attemptEvents)
-        .where(
-          and(
-            eq(s.attemptEvents.learnerId, learner.id),
-            eq(s.attemptEvents.lessonId, lessonId),
-            eq(s.attemptEvents.eventType, 'win_check'),
-            eq(s.attemptEvents.blockId, blockId),
-            eq(s.attemptEvents.createdAt, minCreatedAt),
-          ),
-        )
-        .limit(1);
-
-      if (firstRow?.correct === true) {
-        firstAttemptCorrect++;
-      }
+    for (const row of firstAttemptRows) {
+      if (!row.block_id || !winCheckItemIds.includes(row.block_id)) continue;
+      if (row.correct === true) firstAttemptCorrect++;
     }
 
     const allAnsweredFirstTime = winCheckItemIds.every((id) =>
-      firstAttemptRows.some((r) => r.blockId === id),
+      firstAttemptRows.some((r) => r.block_id === id),
     );
 
     // Pass verdict is based on first-attempt scores only.
@@ -149,15 +124,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ lessonId: stri
         await recordWinCheckResult(db, lessonId, firstAttemptCorrect, total);
         winCheckResult = { answered: firstAttemptCorrect, total, passed: true };
 
-        // Trigger the distiller fire-and-forget AFTER recordWinCheckResult.
+        // Trigger the distill workflow fire-and-forget AFTER recordWinCheckResult.
         // Errors are caught and logged; they do not affect the HTTP response.
-        distillLesson(db, { lessonId, learnerId: learner.id }).catch((err) =>
-          console.error('distillLesson failed', err),
+        start(distillLessonWorkflow, [lessonId, learner.id]).catch((err) =>
+          console.error('distillLessonWorkflow start failed', err),
         );
       } else {
-        // First attempts failed — pass stays false.
-        // The retry-encouragement UX appears; re-answering is allowed for practice
-        // but pass verdict is final (first-attempt evidence is already recorded).
+        // First attempts failed — pass stays false permanently.
+        // Pass is decided by first attempts — by design, no retry path to passed;
+        // the retry panel is practice only (encourages re-engagement, not re-grading).
         winCheckResult = { answered: firstAttemptCorrect, total, passed: false };
       }
     }

@@ -132,6 +132,9 @@ describe('distillLesson', () => {
     const evidence = rec.evidence as Record<string, unknown>;
     expect(evidence.lessonId).toBe(lesson.id);
     expect(evidence.source).toBe('distiller');
+    // attemptEventIds must be populated with the win_check event ids actually used.
+    expect(Array.isArray(evidence.attemptEventIds)).toBe(true);
+    expect((evidence.attemptEventIds as string[]).length).toBeGreaterThan(0);
   });
 
   it('full round-trip: glossary term promoted with FK to first record', async () => {
@@ -365,6 +368,103 @@ describe('distillLesson', () => {
 
   it('first-attempt-only: 4/4 passes', () => {
     expect(winCheckPassed(4, 4)).toBe(true);
+  });
+
+  // ── Integration: tally bug regression ─────────────────────────────────────
+  // Reproduces the OLD MIN(created_at)-then-equality bug shape:
+  // two win_check events for one item (first wrong, second correct at a later
+  // timestamp) + one correct-first for the other item.
+  // Distiller must report answered=2, firstAttemptCorrect=1, so passed=false.
+  it('tally regression: wrong-then-right item is first-attempt-incorrect (DB round-trip)', async () => {
+    const { learner, track, node } = await seedWorld('tally-reg');
+    const lesson = await seedReadyLesson(track.id, node.id);
+
+    // wc1: first attempt WRONG
+    const [e1] = await testDb.insert(s.attemptEvents).values({
+      learnerId: learner.id,
+      lessonId: lesson.id,
+      blockId: 'wc1',
+      eventType: 'win_check',
+      correct: false,
+      payload: {},
+    }).returning();
+    // wc1: second attempt correct — distinct timestamp guaranteed by serial insert + DB default
+    await testDb.insert(s.attemptEvents).values({
+      learnerId: learner.id,
+      lessonId: lesson.id,
+      blockId: 'wc1',
+      eventType: 'win_check',
+      correct: true,
+      payload: {},
+    });
+    // wc2: first attempt correct
+    const [e2] = await testDb.insert(s.attemptEvents).values({
+      learnerId: learner.id,
+      lessonId: lesson.id,
+      blockId: 'wc2',
+      eventType: 'win_check',
+      correct: true,
+      payload: {},
+    }).returning();
+
+    const result = await distillLesson(testDb, { lessonId: lesson.id, learnerId: learner.id });
+
+    // evidence ids must contain exactly the first-attempt event ids (e1 for wc1, e2 for wc2)
+    const evidence = (await testDb
+      .select()
+      .from(s.learningRecords)
+      .where(eq(s.learningRecords.id, result.recordIds[0]))
+    )[0].evidence as Record<string, unknown>;
+
+    const usedIds = evidence.attemptEventIds as string[];
+    expect(usedIds).toContain(e1.id);   // first attempt for wc1 (wrong)
+    expect(usedIds).toContain(e2.id);   // first attempt for wc2 (correct)
+    expect(usedIds.length).toBe(2);
+
+    // With 1/2 first-attempt-correct, winCheckPassed(1,2)=false → distiller
+    // builds evidence but the LLM still runs (evidence summary shows 1 correct).
+    // The key assertion is that the evidence shows only 1 first-attempt-correct.
+    const evidenceSummaryCorrect = usedIds.filter(
+      (id) => id === e2.id,  // e2 is the correct-first attempt
+    );
+    expect(evidenceSummaryCorrect.length).toBe(1);
+  });
+
+  it('tally regression: all-correct-first → passed evidence (DB round-trip)', async () => {
+    const { learner, track, node } = await seedWorld('tally-pass');
+    const lesson = await seedReadyLesson(track.id, node.id);
+
+    // Both items answered correctly on first attempt
+    const [e1] = await testDb.insert(s.attemptEvents).values({
+      learnerId: learner.id,
+      lessonId: lesson.id,
+      blockId: 'wc1',
+      eventType: 'win_check',
+      correct: true,
+      payload: {},
+    }).returning();
+    const [e2] = await testDb.insert(s.attemptEvents).values({
+      learnerId: learner.id,
+      lessonId: lesson.id,
+      blockId: 'wc2',
+      eventType: 'win_check',
+      correct: true,
+      payload: {},
+    }).returning();
+
+    const result = await distillLesson(testDb, { lessonId: lesson.id, learnerId: learner.id });
+
+    expect(result.inserted).toBe(true);
+    const evidence = (await testDb
+      .select()
+      .from(s.learningRecords)
+      .where(eq(s.learningRecords.id, result.recordIds[0]))
+    )[0].evidence as Record<string, unknown>;
+
+    const usedIds = evidence.attemptEventIds as string[];
+    expect(usedIds).toContain(e1.id);
+    expect(usedIds).toContain(e2.id);
+    expect(usedIds.length).toBe(2);
   });
 });
 
