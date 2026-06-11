@@ -22,6 +22,7 @@ export const missionRevisions = pgTable('mission_revisions', {
   priorSnapshot: jsonb('prior_snapshot').notNull(),
   reason: text('reason').notNull(),
   // App-enforced: must reference a record in the same track as the mission (no composite FK — revisions don't carry track_id).
-  linkedLearningRecordId: uuid('linked_learning_record_id').references(() => learningRecords.id),
+  // ON DELETE SET NULL: if the referenced record is deleted (e.g. via track cascade), the link goes null rather than blocking.
+  linkedLearningRecordId: uuid('linked_learning_record_id').references(() => learningRecords.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

@@ -18,6 +18,7 @@ import { db } from '@/lib/db';
 import { balance, ensureMonthlyGrant } from '@/lib/credits';
 import { getLedgerHistory, getSubscriptionStatus } from '@/lib/billing-queries';
 import { BillingActions } from './billing-actions';
+import { DataSection } from './data-section';
 
 const ENTRY_TYPE_LABELS: Record<string, string> = {
   grant: 'Monthly grant',
@@ -181,6 +182,8 @@ export default async function BillingPage({
           </div>
         )}
       </section>
+
+      <DataSection />
     </main>
   );
 }

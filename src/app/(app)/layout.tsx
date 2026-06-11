@@ -7,6 +7,7 @@ import { getLearnerByUserId } from '@/server/learners';
 import { getDueCount } from '@/lib/reviews';
 import { SignOutButton } from '@/components/signout-button';
 import { SessionNudge } from '@/components/session-nudge';
+import { Footer } from '@/components/footer';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -45,6 +46,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       </header>
       {children}
       <SessionNudge />
+      <Footer />
     </div>
   );
 }
