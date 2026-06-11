@@ -11,14 +11,14 @@ export function Footer() {
         <Link
           href="/privacy"
           data-testid="footer-privacy"
-          className="text-xs text-ink-400 hover:text-sky-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+          className="text-xs text-ink-600 hover:text-sky-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
         >
           Privacy Policy
         </Link>
         <Link
           href="/terms"
           data-testid="footer-terms"
-          className="text-xs text-ink-400 hover:text-sky-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+          className="text-xs text-ink-600 hover:text-sky-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
         >
           Terms of Service
         </Link>
