@@ -21,7 +21,7 @@
 import 'dotenv/config';
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -39,6 +39,10 @@ import { faithfulnessScore, ALERT_THRESHOLD } from '../src/server/lessons/verdic
 const args = process.argv.slice(2);
 const isLive = args.includes('--live');
 const isYes = args.includes('--yes');
+
+// Compute a unique run ID at startup (base36 timestamp).
+// This ensures emails and names are unique even if the script crashes and re-runs.
+const RUN_ID = Date.now().toString(36);
 
 if (isLive && !isYes) {
   console.error(
@@ -85,6 +89,18 @@ function loadCases(): EvalCase[] {
   return parsed as EvalCase[];
 }
 
+// ── orphan sweep ─────────────────────────────────────────────────────────────
+// Clean up any orphaned eval users from prior crashed runs. This ensures no
+// unique email constraint collisions when fixture users are created.
+// Deletes all users with email matching 'eval-*@eval.internal' pattern.
+
+async function sweepOrphanFixtures(db: ReturnType<typeof drizzle>) {
+  const result = await db.delete(s.user)
+    .where(sql`${s.user.email} LIKE 'eval-%@eval.internal'`);
+  // result is a Delete statement object; call it to execute
+  return result;
+}
+
 // ── trust-domain seeds ────────────────────────────────────────────────────────
 // Minimal allowlist: fixture pipeline uses sources from these domains (matching
 // the fake 'vet-sources' fixture which trusts docs.python.org + MDN + realpython.com).
@@ -111,15 +127,15 @@ type Db = ReturnType<typeof drizzle<typeof s>>;
 
 async function buildFixture(db: Db, c: EvalCase) {
   return await db.transaction(async (tx) => {
-    // user
+    // user (email and name are scoped by RUN_ID to avoid collisions from prior crashed runs)
     const userId = crypto.randomUUID();
     const [user] = await tx.insert(s.user)
-      .values({ id: userId, name: `eval-${c.id}`, email: `eval-${c.id}@eval.internal` })
+      .values({ id: userId, name: `eval-${c.id}-${RUN_ID}`, email: `eval-${c.id}-${RUN_ID}@eval.internal` })
       .returning();
 
     // learner
     const [learner] = await tx.insert(s.learners)
-      .values({ userId: user.id, displayName: `eval-${c.id}`, ageBand: '18_plus' })
+      .values({ userId: user.id, displayName: `eval-${c.id}-${RUN_ID}`, ageBand: '18_plus' })
       .returning();
 
     // track
@@ -422,6 +438,9 @@ async function main() {
 
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
   const db = drizzle(pool, { schema: s });
+
+  // Sweep orphaned eval users from prior crashed runs (prevents email collision)
+  await sweepOrphanFixtures(db);
 
   // Ensure allowlist rows exist (idempotent; dev DB already has them from seed:trust).
   await ensureAllowlist(db);
