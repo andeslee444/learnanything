@@ -33,6 +33,14 @@ import { stripContentAnswerKey } from '../src/app/api/lessons/[lessonId]/route.j
 import { distillLesson } from '../src/server/lessons/distiller.js';
 import { verifyBlock } from '../src/server/lessons/verify.js';
 import { pickArticleIndexes, computeFinalize, maybeAlertFaithfulness } from '../src/server/lessons/verdicts.js';
+import {
+  PROGRAMMING_TIER1_DOMAINS,
+  PROGRAMMING_TIER2_DOMAINS,
+  HISTORY_TIER1_DOMAINS,
+  HISTORY_TIER2_DOMAINS,
+  MATH_TIER1_DOMAINS,
+  SCIENCE_TIER1_DOMAINS,
+} from '../src/lib/trust-seed-domains.js';
 
 // ── flags ─────────────────────────────────────────────────────────────────────
 
@@ -143,30 +151,18 @@ async function sweepOrphanFixtures(db: ReturnType<typeof drizzle>) {
 }
 
 // ── trust-domain seeds ────────────────────────────────────────────────────────
-// Minimal allowlist: fixture pipeline uses sources from these domains (matching
-// the fake 'vet-sources' fixture which trusts docs.python.org + MDN + realpython.com).
-// history fixture sources use britannica.com + worldhistory.org.
+// Allowlist for the eval harness — sourced from the shared trust-seed-domains
+// module (same lists used by scripts/seed-trust-domains.ts).
 // Insert via onConflictDoNothing — safe to call repeatedly.
-
-const PROGRAMMING_DOMAINS = ['docs.python.org', 'developer.mozilla.org', 'realpython.com'];
-const HISTORY_DOMAINS     = ['britannica.com', 'worldhistory.org', 'loc.gov'];
-const MATH_DOMAINS        = [
-  'khanacademy.org', 'mathworld.wolfram.com', 'artofproblemsolving.com', 'nctm.org', 'maa.org',
-  'mathigon.org', 'brilliant.org', 'desmos.com', 'mathisfun.com', 'openstax.org',
-  'ams.org', 'plus.maths.org', '3blue1brown.com', 'purplemath.com', 'cuemath.com',
-];
-const SCIENCE_DOMAINS     = [
-  'nasa.gov', 'noaa.gov', 'nature.com', 'scientificamerican.com', 'nih.gov',
-  'science.org', 'nationalgeographic.com', 'exploratorium.edu', 'sciencedaily.com', 'britannica.com',
-  'hhmi.org', 'acs.org', 'aps.org', 'physics.org', 'chemguide.co.uk',
-];
 
 async function ensureAllowlist(db: ReturnType<typeof drizzle>) {
   const seeds = [
-    ...PROGRAMMING_DOMAINS.map((domain) => ({ vertical: 'programming', domain, tier: 'tier1' as const, note: 'eval-harness seed' })),
-    ...HISTORY_DOMAINS.map((domain)     => ({ vertical: 'history',     domain, tier: 'tier1' as const, note: 'eval-harness seed' })),
-    ...MATH_DOMAINS.map((domain)        => ({ vertical: 'math',        domain, tier: 'tier1' as const, note: 'eval-harness seed' })),
-    ...SCIENCE_DOMAINS.map((domain)     => ({ vertical: 'science',     domain, tier: 'tier1' as const, note: 'eval-harness seed' })),
+    ...PROGRAMMING_TIER1_DOMAINS.map((domain) => ({ vertical: 'programming', domain, tier: 'tier1' as const, note: 'eval-harness seed' })),
+    ...PROGRAMMING_TIER2_DOMAINS.map((domain) => ({ vertical: 'programming', domain, tier: 'tier2' as const, note: 'eval-harness seed' })),
+    ...HISTORY_TIER1_DOMAINS.map((domain)     => ({ vertical: 'history',     domain, tier: 'tier1' as const, note: 'eval-harness seed' })),
+    ...HISTORY_TIER2_DOMAINS.map((domain)     => ({ vertical: 'history',     domain, tier: 'tier2' as const, note: 'eval-harness seed' })),
+    ...MATH_TIER1_DOMAINS.map((domain)        => ({ vertical: 'math',        domain, tier: 'tier1' as const, note: 'eval-harness seed' })),
+    ...SCIENCE_TIER1_DOMAINS.map((domain)     => ({ vertical: 'science',     domain, tier: 'tier1' as const, note: 'eval-harness seed' })),
   ];
   await (db as ReturnType<typeof drizzle<typeof s>>)
     .insert(s.trustDomains)

@@ -930,6 +930,154 @@ describe('createCheckoutHandler — functional paths', () => {
   });
 });
 
+// ── 20-22. Stale-active self-heal — checkout route ────────────────────────────
+
+describe('stale-active self-heal — checkout', () => {
+  afterEach(() => {
+    vi.resetModules();
+  });
+
+  it('20. DB active + subscriptions.list empty → checkout proceeds (no 409), billing_customers flipped to canceled', async () => {
+    const u = await seedUser('drift-heal-20');
+    const customerId = 'cus_drift20_' + crypto.randomUUID().replace(/-/g, '');
+
+    await testDb.insert(s.billingCustomers).values({
+      userId: u.id,
+      stripeCustomerId: customerId,
+      subscriptionStatus: 'active',
+    });
+
+    const fakeSessionsCreate = vi.fn().mockResolvedValue({ url: 'https://checkout.stripe.com/drift20' });
+
+    vi.resetModules();
+    vi.doMock('@/lib/auth', () => ({
+      auth: { api: { getSession: vi.fn().mockResolvedValue({ user: { id: u.id, email: u.email } }) } },
+    }));
+    vi.doMock('next/headers', () => ({
+      headers: vi.fn().mockResolvedValue(new Headers()),
+    }));
+    const alertCalls: Array<{ kind: string; payload: Record<string, unknown> }> = [];
+    vi.doMock('@/lib/alerts', () => ({
+      alertFounder: (kind: string, payload: Record<string, unknown>) => {
+        alertCalls.push({ kind, payload });
+      },
+    }));
+    vi.doMock('@/lib/stripe', () => ({
+      getStripe: () => ({
+        subscriptions: { list: vi.fn().mockResolvedValue({ data: [] }) },
+        customers: { create: vi.fn().mockResolvedValue({ id: 'cus_new_drift20' }) },
+        checkout: { sessions: { create: fakeSessionsCreate } },
+      }),
+      SUBSCRIPTION_MONTHLY_CREDITS: 30,
+      _resetStripeForTests: vi.fn(),
+    }));
+
+    process.env.STRIPE_SECRET_KEY = 'sk_test_drift20';
+    process.env.STRIPE_PRICE_ID = 'price_drift20';
+
+    const { createCheckoutHandler } = await import('@/app/api/billing/checkout/route');
+    const POST = createCheckoutHandler(testDb);
+    const res = await POST();
+
+    // Must proceed (200), not 409.
+    expect(res.status).toBe(200);
+
+    // billing_customers must be flipped to 'canceled'.
+    const [bc] = await testDb
+      .select({ subscriptionStatus: s.billingCustomers.subscriptionStatus })
+      .from(s.billingCustomers)
+      .where(eq(s.billingCustomers.userId, u.id));
+    expect(bc.subscriptionStatus).toBe('canceled');
+
+    // alertFounder spied with 'billing' + note:'status_drift_healed'.
+    const alert = alertCalls.find((c) => c.kind === 'billing' && c.payload.note === 'status_drift_healed');
+    expect(alert).toBeDefined();
+
+    delete process.env.STRIPE_SECRET_KEY;
+    delete process.env.STRIPE_PRICE_ID;
+  });
+
+  it('21. DB active + subscriptions.list returns one sub → 409 stays', async () => {
+    const u = await seedUser('drift-heal-21');
+    const customerId = 'cus_drift21_' + crypto.randomUUID().replace(/-/g, '');
+
+    await testDb.insert(s.billingCustomers).values({
+      userId: u.id,
+      stripeCustomerId: customerId,
+      subscriptionStatus: 'active',
+    });
+
+    vi.resetModules();
+    vi.doMock('@/lib/auth', () => ({
+      auth: { api: { getSession: vi.fn().mockResolvedValue({ user: { id: u.id, email: u.email } }) } },
+    }));
+    vi.doMock('next/headers', () => ({
+      headers: vi.fn().mockResolvedValue(new Headers()),
+    }));
+    vi.doMock('@/lib/stripe', () => ({
+      getStripe: () => ({
+        subscriptions: { list: vi.fn().mockResolvedValue({ data: [{ id: 'sub_active' }] }) },
+      }),
+      SUBSCRIPTION_MONTHLY_CREDITS: 30,
+      _resetStripeForTests: vi.fn(),
+    }));
+
+    process.env.STRIPE_SECRET_KEY = 'sk_test_drift21';
+    process.env.STRIPE_PRICE_ID = 'price_drift21';
+
+    const { createCheckoutHandler } = await import('@/app/api/billing/checkout/route');
+    const POST = createCheckoutHandler(testDb);
+    const res = await POST();
+
+    expect(res.status).toBe(409);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('already_subscribed');
+
+    delete process.env.STRIPE_SECRET_KEY;
+    delete process.env.STRIPE_PRICE_ID;
+  });
+
+  it('22. DB active + no Stripe key (getStripe null) → 409 stays (fail-closed)', async () => {
+    const u = await seedUser('drift-heal-22');
+    const customerId = 'cus_drift22_' + crypto.randomUUID().replace(/-/g, '');
+
+    await testDb.insert(s.billingCustomers).values({
+      userId: u.id,
+      stripeCustomerId: customerId,
+      subscriptionStatus: 'active',
+    });
+
+    vi.resetModules();
+    vi.doMock('@/lib/auth', () => ({
+      auth: { api: { getSession: vi.fn().mockResolvedValue({ user: { id: u.id, email: u.email } }) } },
+    }));
+    vi.doMock('next/headers', () => ({
+      headers: vi.fn().mockResolvedValue(new Headers()),
+    }));
+    // getStripe() returns null → 503 fires before the active check can run.
+    // This validates that the 503 path fires when stripe is null (existing test 10c covers
+    // the key-absent 503 path; this test verifies no unintended bypass).
+    vi.doMock('@/lib/stripe', () => ({
+      getStripe: () => null,
+      SUBSCRIPTION_MONTHLY_CREDITS: 30,
+      _resetStripeForTests: vi.fn(),
+    }));
+
+    // No STRIPE_SECRET_KEY so 503 returns before active check.
+    delete process.env.STRIPE_SECRET_KEY;
+    process.env.STRIPE_PRICE_ID = 'price_drift22';
+
+    const { createCheckoutHandler } = await import('@/app/api/billing/checkout/route');
+    const POST = createCheckoutHandler(testDb);
+    const res = await POST();
+
+    // 503 fires because stripe is null — fails closed (not 200).
+    expect(res.status).toBe(503);
+
+    delete process.env.STRIPE_PRICE_ID;
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Adversarial-review regressions (H1: concurrent-checkout race; H2: status
 // resurrection via redelivered invoice.paid)

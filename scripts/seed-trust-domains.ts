@@ -2,42 +2,28 @@ import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import 'dotenv/config';
 import * as s from '../src/db/schema';
+import {
+  PROGRAMMING_TIER1_DOMAINS,
+  PROGRAMMING_TIER2_DOMAINS,
+  HISTORY_TIER1_DOMAINS,
+  HISTORY_TIER2_DOMAINS,
+  MATH_TIER1_DOMAINS,
+  SCIENCE_TIER1_DOMAINS,
+} from '../src/lib/trust-seed-domains';
 
 const SEEDS: Array<{ vertical: string | null; domain: string; tier: 'tier1' | 'tier2' | 'tier3' | 'blocked'; note?: string }> = [
   // ── programming: tier 1 (primary/official) ──
-  ...[
-    'developer.mozilla.org', 'docs.python.org', 'doc.rust-lang.org', 'nodejs.org', 'react.dev',
-    'go.dev', 'typescriptlang.org', 'docs.oracle.com', 'learn.microsoft.com', 'kubernetes.io',
-    'git-scm.com', 'postgresql.org', 'w3.org', 'whatwg.org', 'docs.docker.com',
-    'pip.pypa.io', 'packaging.python.org', 'peps.python.org', 'tc39.es', 'gcc.gnu.org',
-  ].map((domain) => ({ vertical: 'programming', domain, tier: 'tier1' as const, note: 'official docs/standards' })),
+  ...PROGRAMMING_TIER1_DOMAINS.map((domain) => ({ vertical: 'programming', domain, tier: 'tier1' as const, note: 'official docs/standards' })),
   // ── programming: tier 2 (recognized experts/editorial) ──
-  ...[
-    'realpython.com', 'web.dev', 'css-tricks.com', 'martinfowler.com', 'refactoring.guru',
-    'eloquentjavascript.net', 'javascript.info', 'overreacted.io', 'jvns.ca', 'blog.rust-lang.org',
-  ].map((domain) => ({ vertical: 'programming', domain, tier: 'tier2' as const, note: 'recognized expert/editorial' })),
+  ...PROGRAMMING_TIER2_DOMAINS.map((domain) => ({ vertical: 'programming', domain, tier: 'tier2' as const, note: 'recognized expert/editorial' })),
   // ── history: tier 1 (primary/institutional) ──
-  ...[
-    'loc.gov', 'archives.gov', 'britannica.com', 'history.state.gov', 'nationalarchives.gov.uk',
-    'bl.uk', 'europeana.eu', 'ushmm.org', 'docsteach.org', 'avalon.law.yale.edu',
-    'gilderlehrman.org', 'historicengland.org.uk', 'si.edu', 'metmuseum.org', 'britishmuseum.org',
-  ].map((domain) => ({ vertical: 'history', domain, tier: 'tier1' as const, note: 'primary/institutional' })),
+  ...HISTORY_TIER1_DOMAINS.map((domain) => ({ vertical: 'history', domain, tier: 'tier1' as const, note: 'primary/institutional' })),
   // ── history: tier 2 ──
-  ...[
-    'worldhistory.org', 'smithsonianmag.com', 'historytoday.com', 'historyextra.com', 'jstor.org',
-  ].map((domain) => ({ vertical: 'history', domain, tier: 'tier2' as const, note: 'reputable editorial' })),
+  ...HISTORY_TIER2_DOMAINS.map((domain) => ({ vertical: 'history', domain, tier: 'tier2' as const, note: 'reputable editorial' })),
   // ── math: tier 1 ──
-  ...[
-    'khanacademy.org', 'mathworld.wolfram.com', 'artofproblemsolving.com', 'nctm.org', 'maa.org',
-    'mathigon.org', 'brilliant.org', 'desmos.com', 'mathisfun.com', 'openstax.org',
-    'ams.org', 'plus.maths.org', '3blue1brown.com', 'purplemath.com', 'cuemath.com',
-  ].map((domain) => ({ vertical: 'math', domain, tier: 'tier1' as const, note: 'recognized math education resource' })),
+  ...MATH_TIER1_DOMAINS.map((domain) => ({ vertical: 'math', domain, tier: 'tier1' as const, note: 'recognized math education resource' })),
   // ── science: tier 1 ──
-  ...[
-    'nasa.gov', 'noaa.gov', 'nature.com', 'scientificamerican.com', 'nih.gov',
-    'science.org', 'nationalgeographic.com', 'exploratorium.edu', 'sciencedaily.com', 'britannica.com',
-    'hhmi.org', 'acs.org', 'aps.org', 'physics.org', 'chemguide.co.uk',
-  ].map((domain) => ({ vertical: 'science', domain, tier: 'tier1' as const, note: 'recognized science institution/publication' })),
+  ...SCIENCE_TIER1_DOMAINS.map((domain) => ({ vertical: 'science', domain, tier: 'tier1' as const, note: 'recognized science institution/publication' })),
   // ── global blocklist (vertical = null) ──
   ...[
     'pinterest.com', 'quora.com', 'answers.com', 'coursehero.com', 'scribd.com',

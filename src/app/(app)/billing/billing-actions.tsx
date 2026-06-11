@@ -200,7 +200,7 @@ export function UpgradePrompt({ onDismiss }: UpgradePromptProps) {
           href="/billing"
           className="text-sky-600 underline underline-offset-2 hover:text-sky-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
         >
-          Upgrade to get 30 credits/month
+          Upgrade to get 30 credits/month (plus your 3 free monthly credits)
         </Link>{' '}
         for $15/mo.
       </p>

@@ -101,7 +101,7 @@ export default async function BillingPage({
 
         <p className="mt-1 text-sm text-ink-600">
           {subscriptionStatus === 'active'
-            ? '30 credits per month (renews automatically).'
+            ? '30 credits per month (on top of your 3 free monthly credits, renews automatically).'
             : subscriptionStatus === 'canceled'
             ? 'Your subscription has been canceled. Credits may still be available.'
             : '3 free lesson credits per month. Upgrade for more.'}

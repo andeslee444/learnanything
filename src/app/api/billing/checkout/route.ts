@@ -25,6 +25,7 @@ import { auth } from '@/lib/auth';
 import { db } from '@/lib/db';
 import * as s from '@/db/schema';
 import { getStripe } from '@/lib/stripe';
+import { confirmActiveSubscription } from '@/lib/billing-queries';
 
 const APP_URL = process.env.APP_URL ?? 'http://localhost:3000';
 
@@ -58,8 +59,16 @@ export function createCheckoutHandler(database: Db) {
       .limit(1);
 
     // Already active subscriber — UI should route to portal instead.
+    // Before blocking, verify live against Stripe to self-heal stale-'active' drift
+    // (can occur when customer.subscription.deleted is lost during a >72h webhook outage).
     if (existing?.subscriptionStatus === 'active') {
-      return NextResponse.json({ error: 'already_subscribed' }, { status: 409 });
+      const stillActive = await confirmActiveSubscription(database, stripe, {
+        stripeCustomerId: existing.stripeCustomerId ?? null,
+      });
+      if (stillActive) {
+        return NextResponse.json({ error: 'already_subscribed' }, { status: 409 });
+      }
+      // Drift healed → fall through to create a new checkout session.
     }
 
     let stripeCustomerId: string;
@@ -109,6 +118,8 @@ export function createCheckoutHandler(database: Db) {
       client_reference_id: userId,
       success_url: `${APP_URL}/billing?success=1`,
       cancel_url: `${APP_URL}/billing`,
+      // 30-minute expiry (Stripe minimum) — shrinks the stale-tab window.
+      expires_at: Math.floor(Date.now() / 1000) + 30 * 60,
     });
 
     return NextResponse.json({ url: checkoutSession.url });

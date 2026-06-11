@@ -22,6 +22,8 @@ export async function deleteAccount(db: Db, userId: string): Promise<void> {
   //   user → session (cascade)
   //   user → account (cascade)
   //   user → learners (cascade)
+  //     learners.parentUserId → user.id ON DELETE SET NULL (safe — sibling learners
+  //       that reference this user as parent survive with parentUserId = null)
   //     learners → tracks (cascade)
   //       tracks → missions (cascade)
   //         missions → mission_revisions (cascade)

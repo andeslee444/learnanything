@@ -32,7 +32,7 @@
  * 10. POST /api/account/delete → 401 without session.
  */
 
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { NextRequest } from 'next/server';
 import { testDb, testPool, resetDb } from '@/test/db';
@@ -802,6 +802,122 @@ describe('POST /api/account/delete — active-subscription guard', () => {
     expect(rows).toHaveLength(0);
 
     vi.resetModules();
+  });
+});
+
+// ── Stale-active self-heal — delete route ────────────────────────────────────
+
+describe('POST /api/account/delete — stale-active self-heal', () => {
+  afterEach(() => {
+    vi.resetModules();
+  });
+
+  it('13. DB active + subscriptions.list empty → delete proceeds (200), user gone', async () => {
+    const world = await seedFullWorld('drift-heal-delete-13');
+    // seedFullWorld already creates a billing_customers row with status 'active'.
+
+    vi.resetModules();
+    vi.doMock('@/lib/auth', () => ({
+      auth: { api: { getSession: vi.fn().mockResolvedValue({ user: { id: world.user.id } }) } },
+    }));
+    vi.doMock('next/headers', () => ({
+      headers: vi.fn().mockResolvedValue(new Headers()),
+    }));
+    const alertCalls: Array<{ kind: string; payload: Record<string, unknown> }> = [];
+    vi.doMock('@/lib/alerts', () => ({
+      alertFounder: (kind: string, payload: Record<string, unknown>) => {
+        alertCalls.push({ kind, payload });
+      },
+    }));
+    vi.doMock('@/lib/stripe', () => ({
+      getStripe: () => ({
+        subscriptions: { list: vi.fn().mockResolvedValue({ data: [] }) },
+      }),
+      _resetStripeForTests: vi.fn(),
+    }));
+
+    const { createPostHandler } = await import('@/app/api/account/delete/route');
+    const POST = createPostHandler(testDb);
+    const req = new NextRequest('http://localhost/api/account/delete', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: 'DELETE' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    const res = await POST(req);
+
+    // Must proceed — not blocked with 409.
+    expect(res.status).toBe(200);
+
+    // User must be gone.
+    const rows = await testDb.select().from(s.user).where(eq(s.user.id, world.user.id));
+    expect(rows).toHaveLength(0);
+
+    // alertFounder spied.
+    const alert = alertCalls.find((c) => c.kind === 'billing' && c.payload.note === 'status_drift_healed');
+    expect(alert).toBeDefined();
+  });
+
+  it('14. DB active + subscriptions.list returns one sub → 409 stays', async () => {
+    const world = await seedFullWorld('drift-heal-delete-14');
+
+    vi.resetModules();
+    vi.doMock('@/lib/auth', () => ({
+      auth: { api: { getSession: vi.fn().mockResolvedValue({ user: { id: world.user.id } }) } },
+    }));
+    vi.doMock('next/headers', () => ({
+      headers: vi.fn().mockResolvedValue(new Headers()),
+    }));
+    vi.doMock('@/lib/stripe', () => ({
+      getStripe: () => ({
+        subscriptions: { list: vi.fn().mockResolvedValue({ data: [{ id: 'sub_active' }] }) },
+      }),
+      _resetStripeForTests: vi.fn(),
+    }));
+
+    const { createPostHandler } = await import('@/app/api/account/delete/route');
+    const POST = createPostHandler(testDb);
+    const req = new NextRequest('http://localhost/api/account/delete', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: 'DELETE' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(409);
+
+    // User must still exist.
+    const [still] = await testDb.select().from(s.user).where(eq(s.user.id, world.user.id));
+    expect(still).toBeDefined();
+  });
+
+  it('15. DB active + getStripe() null → 409 stays (fail-closed)', async () => {
+    const world = await seedFullWorld('drift-heal-delete-15');
+
+    vi.resetModules();
+    vi.doMock('@/lib/auth', () => ({
+      auth: { api: { getSession: vi.fn().mockResolvedValue({ user: { id: world.user.id } }) } },
+    }));
+    vi.doMock('next/headers', () => ({
+      headers: vi.fn().mockResolvedValue(new Headers()),
+    }));
+    vi.doMock('@/lib/stripe', () => ({
+      getStripe: () => null,
+      _resetStripeForTests: vi.fn(),
+    }));
+
+    const { createPostHandler } = await import('@/app/api/account/delete/route');
+    const POST = createPostHandler(testDb);
+    const req = new NextRequest('http://localhost/api/account/delete', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: 'DELETE' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    const res = await POST(req);
+    // getStripe() null → confirmActiveSubscription fails closed → 409.
+    expect(res.status).toBe(409);
+
+    // User must still exist.
+    const [still] = await testDb.select().from(s.user).where(eq(s.user.id, world.user.id));
+    expect(still).toBeDefined();
   });
 });
 

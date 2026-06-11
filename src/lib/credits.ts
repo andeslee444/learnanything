@@ -19,7 +19,11 @@ export class InsufficientCreditsError extends Error {
   }
 }
 
-/** Idempotent: grants FREE_MONTHLY_GRANT once per calendar month (UTC — single global boundary by design). No rollover. */
+/**
+ * Idempotent: grants FREE_MONTHLY_GRANT once per calendar month (UTC — single global boundary by design). No rollover.
+ * Deliberately also granted to active subscribers — the free tier is universal;
+ * subscription credits stack on top (decision 2026-06-11).
+ */
 export async function ensureMonthlyGrant(db: Db, userId: string): Promise<void> {
   await db.transaction(async (tx) => {
     // Serialize concurrent grant checks per user (same advisory-lock pattern as placeHold).

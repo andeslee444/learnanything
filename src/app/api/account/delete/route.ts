@@ -27,6 +27,8 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { auth } from '@/lib/auth';
 import { db } from '@/lib/db';
 import { deleteAccount } from '@/lib/account-delete';
+import { getStripe } from '@/lib/stripe';
+import { confirmActiveSubscription } from '@/lib/billing-queries';
 import * as s from '@/db/schema';
 
 type Db = NodePgDatabase<typeof s>;
@@ -64,20 +66,32 @@ export function createPostHandler(database: Db) {
     // Active-subscription guard — must cancel Stripe billing before deleting.
     // Deleting the account does NOT cancel an active Stripe subscription.
     const [billing] = await database
-      .select({ subscriptionStatus: s.billingCustomers.subscriptionStatus })
+      .select({
+        subscriptionStatus: s.billingCustomers.subscriptionStatus,
+        stripeCustomerId: s.billingCustomers.stripeCustomerId,
+      })
       .from(s.billingCustomers)
       .where(eq(s.billingCustomers.userId, session.user.id))
       .limit(1);
 
     if (billing?.subscriptionStatus === 'active') {
-      return NextResponse.json(
-        {
-          error: 'active_subscription',
-          message:
-            'Cancel your subscription in the billing portal before deleting your account.',
-        },
-        { status: 409 }
-      );
+      // Before blocking, verify live against Stripe to self-heal stale-'active' drift
+      // (can occur when customer.subscription.deleted is lost during a >72h webhook outage).
+      const stripe = getStripe();
+      const stillActive = await confirmActiveSubscription(database, stripe, {
+        stripeCustomerId: billing.stripeCustomerId ?? null,
+      });
+      if (stillActive) {
+        return NextResponse.json(
+          {
+            error: 'active_subscription',
+            message:
+              'Cancel your subscription in the billing portal before deleting your account.',
+          },
+          { status: 409 }
+        );
+      }
+      // Drift healed → fall through to delete account.
     }
 
     await deleteAccount(database, session.user.id);
