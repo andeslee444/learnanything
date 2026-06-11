@@ -41,7 +41,7 @@ export async function runReviewDigest(db: Db, now: Date = new Date()): Promise<R
     .innerJoin(s.learners, eq(s.reviewCards.learnerId, s.learners.id))
     .innerJoin(s.user, eq(s.learners.userId, s.user.id))
     .where(lte(s.reviewCards.due, now))
-    .groupBy(s.reviewCards.learnerId, s.user.email);
+    .groupBy(s.reviewCards.learnerId, s.user.id, s.user.email);
 
   // Filter to learners with at least 1 due card (count > 0 ensured by the WHERE).
   const recipients = rows.length;
@@ -55,7 +55,11 @@ export async function runReviewDigest(db: Db, now: Date = new Date()): Promise<R
       subject: `You have ${n} review${n === 1 ? '' : 's'} ready on LearnAnything`,
       // Content discipline: counts and path only — no card content.
       text: `You have ${n} review card${n === 1 ? '' : 's'} due. Open your reviews: /reviews`,
-    }).catch(() => null);
+    }).catch((err) => {
+      // Recipient-free by design: signal a broken transport without leaking who failed.
+      console.error('[cron:email-send-failed]', err instanceof Error ? err.message : String(err));
+      return null;
+    });
     if (result?.sent || result?.transport === 'log') sent++;
   }
 

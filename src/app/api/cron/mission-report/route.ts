@@ -23,7 +23,7 @@ import { and, count, countDistinct, eq, gte, isNotNull } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { db as appDb } from '@/lib/db';
 import * as s from '@/db/schema';
-import { sendEmail } from '@/lib/email';
+import { sendEmail, sanitizeSubjectPart } from '@/lib/email';
 
 type Db = NodePgDatabase<typeof s>;
 
@@ -111,12 +111,17 @@ export async function runMissionReport(db: Db, since?: Date): Promise<MissionRep
     // Count new glossary terms for this track in the window (track-scoped, time-bounded).
     const newTermCount = termsByTrack.get(row.trackId) ?? 0;
 
+    const topic = sanitizeSubjectPart(row.topic);
     const result = await sendEmail({
       to: row.userEmail,
-      subject: `Your LearnAnything weekly report: ${row.topic}`,
+      subject: `Your LearnAnything weekly report: ${topic}`,
       // Content discipline: topic (user-supplied), counts only — no lesson text.
-      text: `This week on ${row.topic}: ${lessonCount} lesson${lessonCount === 1 ? '' : 's'}, ${newTermCount} new term${newTermCount === 1 ? '' : 's'}.`,
-    }).catch(() => null);
+      text: `This week on ${topic}: ${lessonCount} lesson${lessonCount === 1 ? '' : 's'}, ${newTermCount} new term${newTermCount === 1 ? '' : 's'}.`,
+    }).catch((err) => {
+      // Recipient-free by design: signal a broken transport without leaking who failed.
+      console.error('[cron:email-send-failed]', err instanceof Error ? err.message : String(err));
+      return null;
+    });
     if (result?.sent || result?.transport === 'log') sent++;
   }
 

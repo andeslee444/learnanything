@@ -22,6 +22,16 @@ export interface SendEmailResult {
   transport: 'resend' | 'log';
 }
 
+/**
+ * Strip CR/LF/tab from user-influenced strings before interpolating into an
+ * email subject. Resend is a JSON API, but whether its backend sanitizes
+ * subject fields before building MIME headers is a third-party guarantee we
+ * don't own — header-injection-proof at the source instead.
+ */
+export function sanitizeSubjectPart(s: string): string {
+  return s.replace(/[\r\n\t]+/g, ' ');
+}
+
 export class EmailSendError extends Error {
   constructor(
     message: string,

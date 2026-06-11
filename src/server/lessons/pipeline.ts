@@ -13,7 +13,7 @@ import { generateBlocks } from './generate';
 import { validateLessonContent } from './validate';
 import { start } from 'workflow/api';
 import { verifyLessonWorkflow } from '@/workflows/verify-lesson';
-import { sendEmail } from '@/lib/email';
+import { sendEmail, sanitizeSubjectPart } from '@/lib/email';
 
 type Db = NodePgDatabase<typeof s>;
 
@@ -208,7 +208,7 @@ export async function sendLessonReadyEmail(db: Db, lessonId: string): Promise<vo
   // Extract objective from spec — truncate to 80 chars.
   const specObj = row.objective as { objective?: string };
   const rawObjective = typeof specObj?.objective === 'string' ? specObj.objective : '';
-  const objective = rawObjective.slice(0, 80);
+  const objective = sanitizeSubjectPart(rawObjective.slice(0, 80));
   const subject = objective ? `Your lesson is ready: ${objective}` : 'Your lesson is ready';
   const lessonPath = `/tracks/${row.trackId}/lessons/${lessonId}`;
   await sendEmail({
