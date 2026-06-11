@@ -5,6 +5,7 @@ import type { LessonBlock, QuizItem } from '@/server/lessons/blocks';
 import type { LessonPlan } from '@/server/lessons/blocks';
 import type { ProgressEvent, ProgressStage } from '@/workflows/generate-lesson';
 import { ArticleSection } from '@/components/lesson/article-section';
+import type { BlockVerifyStatus } from '@/components/lesson/article-section';
 import { GlossaryCallout } from '@/components/lesson/glossary-callout';
 import { QuizBlock } from '@/components/lesson/quiz-block';
 import { FlashcardDeck } from '@/components/lesson/flashcard-deck';
@@ -100,6 +101,23 @@ function LessonGenerating({ msgIndex, stage, spec }: LessonGeneratingProps) {
 
 // ── Ready lesson renderer ────────────────────────────────────────────────────
 
+/**
+ * Shape of one row from GET /api/lessons/[lessonId]/verification
+ */
+type VerifyRow = {
+  blockId: string;
+  status: BlockVerifyStatus;
+  claimsVerified: number;
+  claimsTotal: number;
+};
+
+/**
+ * Maximum wall-clock time (ms) we keep polling the verification endpoint.
+ * After 3 minutes we stop with whatever state we have.
+ */
+const VERIFY_POLL_MAX_MS = 3 * 60 * 1000;
+const VERIFY_POLL_INTERVAL_MS = 5_000;
+
 type LessonReadyProps = Props & {
   data: LessonData;
 };
@@ -113,6 +131,57 @@ function LessonReady({ lessonId, trackId, data }: LessonReadyProps) {
   const openerItems = content.openerItems ?? [];
   const blocks = content.blocks ?? [];
   const winCheckItems = content.winCheck?.items ?? [];
+
+  // ── Verification badge state ────────────────────────────────────────────────
+  // Map from blockId ("block-{i}") → VerifyRow.
+  // Empty map = no rows yet (pre-Phase-6 or workflow not started) → no badges.
+  const [verifyMap, setVerifyMap] = useState<Map<string, VerifyRow>>(new Map());
+
+  useEffect(() => {
+    let active = true;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    const startedAt = Date.now();
+
+    async function fetchVerification() {
+      try {
+        const res = await fetch(`/api/lessons/${lessonId}/verification`);
+        if (!active || !res.ok) return;
+        const rows = (await res.json()) as VerifyRow[];
+        if (!active) return;
+
+        const newMap = new Map<string, VerifyRow>();
+        for (const row of rows) {
+          newMap.set(row.blockId, row);
+        }
+        setVerifyMap(newMap);
+
+        // Stop polling when all rows are terminal (none 'checking')
+        const anyChecking = rows.some((r) => r.status === 'checking');
+        const timedOut = Date.now() - startedAt >= VERIFY_POLL_MAX_MS;
+
+        if (!anyChecking || timedOut) {
+          // All terminal (or we hit the cap) — stop polling
+          if (pollTimer !== null) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+          }
+        }
+      } catch {
+        // Ignore transient errors — polling continues
+      }
+    }
+
+    // Fetch once immediately on mount, then set up polling.
+    fetchVerification();
+
+    // Start polling; fetchVerification will clear the timer when no longer needed.
+    pollTimer = setInterval(fetchVerification, VERIFY_POLL_INTERVAL_MS);
+
+    return () => {
+      active = false;
+      if (pollTimer !== null) clearInterval(pollTimer);
+    };
+  }, [lessonId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Show win-check only after opener items (if any) are done.
   const showBlocks = openerItems.length === 0 || openerComplete;
@@ -149,7 +218,16 @@ function LessonReady({ lessonId, trackId, data }: LessonReadyProps) {
       {/* Main blocks */}
       {showBlocks && blocks.map((block, idx) => {
         if (block.type === 'article') {
-          return <ArticleSection key={idx} block={block} />;
+          // Pass verifyStatus only if there are rows at all (backward-compat: zero rows = no badge).
+          const blockId = `block-${idx}`;
+          const verifyRow = verifyMap.size > 0 ? verifyMap.get(blockId) : undefined;
+          return (
+            <ArticleSection
+              key={idx}
+              block={block}
+              verifyStatus={verifyRow?.status}
+            />
+          );
         }
         if (block.type === 'glossary_callout') {
           return <GlossaryCallout key={idx} block={block} />;
