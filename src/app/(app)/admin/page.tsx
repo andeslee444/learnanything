@@ -118,7 +118,8 @@ export default function AdminPage() {
                     <td className="px-4 py-3 text-ink-700">{item.displayName}</td>
                     <td className="px-4 py-3 text-ink-700 max-w-[180px] truncate">{item.topic}</td>
                     <td className="px-4 py-3">
-                      <span className="rounded-full bg-sun-100 px-2 py-0.5 text-xs font-medium text-sun-700 capitalize">
+                      {/* sun-700 (#8c5e0a) on sun-100 (#fff3d6): 4.97:1 — passes WCAG AA. */}
+                      <span className="rounded-full bg-sun-100 px-2 py-0.5 text-sm font-semibold text-sun-700 capitalize">
                         {item.status}
                       </span>
                     </td>
