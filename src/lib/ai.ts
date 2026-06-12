@@ -50,11 +50,25 @@ export async function llmObject<T>(opts: {
     return opts.schema.parse(resolved);
   }
   const model: LanguageModel = opts.modelOverride ?? gateway(MODEL_TIERS[opts.tier]);
-  const { output } = await generateText({
-    model,
-    output: Output.object({ schema: opts.schema }),
-    system: opts.system,
-    prompt: opts.prompt,
-  });
-  return output as T;
+  try {
+    const { output } = await generateText({
+      model,
+      output: Output.object({ schema: opts.schema }),
+      system: opts.system,
+      prompt: opts.prompt,
+    });
+    return output as T;
+  } catch (err: unknown) {
+    // Log schema-parse failures with the raw text so production issues are debuggable.
+    // The error type callers see is not changed — we rethrow as-is.
+    if (err !== null && typeof err === 'object' && 'name' in err) {
+      const asAiError = err as { name: string; text?: string };
+      if (asAiError.name === 'AI_NoObjectGeneratedError') {
+        const textPreview =
+          typeof asAiError.text === 'string' ? asAiError.text.slice(0, 300) : '(no text)';
+        console.error('[llmObject] schema-parse failed', { purpose: opts.purpose, textPreview });
+      }
+    }
+    throw err;
+  }
 }

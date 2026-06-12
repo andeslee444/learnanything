@@ -18,6 +18,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { z } from 'zod';
 import * as s from '@/db/schema';
 import { llmObject } from '@/lib/ai';
+import { llmText, llmTextRequired, llmArrayMax } from '@/lib/llm-schema';
 import { createCardForGlossaryTerm } from '@/lib/reviews';
 import { nextRecordSeq } from '@/server/tracks';
 
@@ -38,20 +39,21 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 // ── Output schema ─────────────────────────────────────────────────────────────
 
 export const distillRecordSchema = z.object({
-  recordType: z.enum(['demonstrated_understanding', 'corrected_misconception']),
-  title: z.string().min(1).max(120),
-  body: z.string().min(1).max(400),
-  implications: z.string().max(300).optional(),
+  recordType: z.enum(['demonstrated_understanding', 'corrected_misconception']), // STRICT: enum — DB pgEnum
+  title: llmTextRequired(1, 120),
+  body: llmTextRequired(1, 400),
+  implications: llmText(300).optional(),
 });
 
 export const distillOutputSchema = z.object({
-  records: z.array(distillRecordSchema).min(0).max(4),
-  glossaryPromotions: z.array(
+  records: llmArrayMax(distillRecordSchema, 4),
+  glossaryPromotions: llmArrayMax(
     z.object({
-      term: z.string().min(1).max(80),
-      definition: z.string().min(1).max(300),
+      term: llmTextRequired(1, 80),
+      definition: llmTextRequired(1, 300),
     }),
-  ).min(0).max(4),
+    4,
+  ),
 });
 
 export type DistillOutput = z.infer<typeof distillOutputSchema>;
@@ -59,14 +61,15 @@ export type DistillOutput = z.infer<typeof distillOutputSchema>;
 // ── Reference-doc output schema ───────────────────────────────────────────────
 
 export const createReferenceDocSchema = z.object({
-  title: z.string().min(1).max(120),
-  docType: z.enum(REF_DOC_TYPES),
-  sections: z.array(
+  title: llmTextRequired(1, 120),
+  docType: z.enum(REF_DOC_TYPES), // STRICT: enum — DB pgEnum
+  sections: llmArrayMax(
     z.object({
-      heading: z.string().min(1).max(80),
-      markdown: z.string().min(1).max(2000),
+      heading: llmTextRequired(1, 80),
+      markdown: llmTextRequired(1, 2000),
     }),
-  ).min(1).max(6),
+    6,
+  ),
 });
 
 export type CreateReferenceDocOutput = z.infer<typeof createReferenceDocSchema>;

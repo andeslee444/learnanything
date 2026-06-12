@@ -1,22 +1,22 @@
 import { z } from 'zod';
 import { llmObject } from '@/lib/ai';
+import { llmText, llmTextRequired, llmArrayMax } from '@/lib/llm-schema';
 import type { Extraction } from './extract';
 import type { DossierContent } from './dossier-cache';
 
 const synthesisSchema = z.object({
-  claims: z
-    .array(
-      z.object({
-        claim: z.string().min(8).max(400),
-        sourceUrls: z.array(z.string()).min(1),
-      })
-    )
-    .min(3)
-    .max(30),
-  glossarySeeds: z
-    .array(z.object({ term: z.string().max(80), definition: z.string().max(300) }))
-    .max(15),
-  misconceptions: z.array(z.string().max(300)).max(10),
+  claims: llmArrayMax(
+    z.object({
+      claim: llmTextRequired(8, 400),
+      sourceUrls: z.array(z.string()).min(1),
+    }),
+    30,
+  ),
+  glossarySeeds: llmArrayMax(
+    z.object({ term: llmText(80), definition: llmText(300) }),
+    15,
+  ),
+  misconceptions: llmArrayMax(llmText(300), 10),
 });
 
 const SYNTH_SYSTEM = `You merge per-source extractions into one topic dossier for lesson generation.

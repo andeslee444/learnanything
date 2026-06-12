@@ -1,24 +1,25 @@
 import { z } from 'zod';
+import { llmText, llmTextRequired, llmArrayMax } from '@/lib/llm-schema';
 
 export const quizItemSchema = z.object({
   id: z.string().min(1),
-  question: z.string().min(8).max(400),
-  options: z.array(z.string().min(1).max(200)).length(4),
-  correctIndex: z.number().int().min(0).max(3),
-  explanation: z.string().min(8).max(500), // shown AFTER answering (retrieval before explanation — spec §3)
+  question: llmTextRequired(8, 400),
+  options: z.array(llmTextRequired(1, 200)).length(4),
+  correctIndex: z.number().int().min(0).max(3), // STRICT: structural index into options array
+  explanation: llmTextRequired(8, 500), // shown AFTER answering (retrieval before explanation — spec §3)
 });
 export type QuizItem = z.infer<typeof quizItemSchema>;
 
 export const articleBlockSchema = z.object({
   type: z.literal('article'),
-  heading: z.string().min(3).max(120),
-  markdown: z.string().min(50).max(7000),
+  heading: llmTextRequired(3, 120),
+  markdown: llmTextRequired(50, 7000),
   citationUrls: z.array(z.string()).min(1).max(10), // validator resolves against dossier sources
 });
 export const glossaryCalloutSchema = z.object({
   type: z.literal('glossary_callout'),
-  term: z.string().min(1).max(80),
-  definition: z.string().min(8).max(300),
+  term: llmTextRequired(1, 80),
+  definition: llmTextRequired(8, 300),
 });
 export const quizBlockSchema = z.object({
   type: z.literal('quiz'),
@@ -26,32 +27,38 @@ export const quizBlockSchema = z.object({
 });
 export const flashcardDeckSchema = z.object({
   type: z.literal('flashcard_deck'),
-  cards: z.array(z.object({ front: z.string().min(1).max(300), back: z.string().min(1).max(500) })).min(2).max(12),
+  cards: z
+    .array(z.object({ front: llmTextRequired(1, 300), back: llmTextRequired(1, 500) }))
+    .min(2) // STRICT: structural min — deck with <2 cards is malformed
+    .transform((a) => (a.length > 12 ? a.slice(0, 12) : a)),
 });
 export const workedExampleSchema = z.object({
   type: z.literal('worked_example'),
-  problem: z.string().min(8).max(600),
-  steps: z.array(z.object({ text: z.string().min(8).max(500) })).min(2).max(8),
+  problem: llmTextRequired(8, 600),
+  steps: z
+    .array(z.object({ text: llmTextRequired(8, 500) }))
+    .min(2) // STRICT: structural min — example with <2 steps is malformed
+    .transform((a) => (a.length > 8 ? a.slice(0, 8) : a)),
   completionItem: quizItemSchema, // graded finish — keeps "≥1 graded interactive" semantics per block
 });
 
 // ── AnimatedDiagram — LLM emits ONLY parameterized primitives (spec §3: never markup) ──
 export const diagramShapeSchema = z.object({
   id: z.string().min(1).max(40),
-  kind: z.enum(['box', 'circle', 'arrow', 'label']),
+  kind: z.enum(['box', 'circle', 'arrow', 'label']), // STRICT: enum
   // x/y: boxes/labels = top-left; circles = center (SVG semantics); arrows = start point with toX/toY end.
-  x: z.number().min(0).max(100), y: z.number().min(0).max(100),   // percentage coords
+  x: z.number().min(0).max(100), y: z.number().min(0).max(100),   // percentage coords — STRICT: rendering math
   w: z.number().min(1).max(100).optional(), h: z.number().min(1).max(100).optional(),
   toX: z.number().min(0).max(100).optional(), toY: z.number().min(0).max(100).optional(), // arrows
-  text: z.string().max(60).optional(),
+  text: llmText(60).optional(),
 });
 export const animatedDiagramSchema = z.object({
   type: z.literal('animated_diagram'),
-  title: z.string().min(3).max(120),
+  title: llmTextRequired(3, 120),
   shapes: z.array(diagramShapeSchema).min(2).max(20),
   steps: z.array(z.object({
     highlightIds: z.array(z.string()).min(1).max(10),
-    caption: z.string().min(8).max(300),
+    caption: llmTextRequired(8, 300),
   })).min(2).max(8),
 });
 
@@ -78,18 +85,16 @@ export type LessonContent = z.infer<typeof lessonContentSchema> & { openerItems:
 
 /** Planner output (persisted to lessons.spec along with zpd snapshot). */
 export const lessonPlanSchema = z.object({
-  objective: z.string().min(8).max(200), // exactly ONE teachable thing
-  format: z.literal('article'), // 4a ships one format
-  estimatedMinutes: z.number().int().min(5).max(15),
-  blockOutline: z
-    .array(
-      z.object({
-        type: z.enum(['article', 'glossary_callout', 'quiz', 'flashcard_deck', 'worked_example', 'animated_diagram']),
-        focus: z.string().min(3).max(200),
-      }),
-    )
-    .min(2)
-    .max(10),
+  objective: llmTextRequired(8, 200), // exactly ONE teachable thing
+  format: z.literal('article'), // 4a ships one format — STRICT: discriminator
+  estimatedMinutes: z.number().int().min(5).max(15), // STRICT: numeric range validated downstream
+  blockOutline: llmArrayMax(
+    z.object({
+      type: z.enum(['article', 'glossary_callout', 'quiz', 'flashcard_deck', 'worked_example', 'animated_diagram']), // STRICT: enum
+      focus: llmTextRequired(3, 200),
+    }),
+    10,
+  ),
 });
 export type LessonPlan = z.infer<typeof lessonPlanSchema>;
 

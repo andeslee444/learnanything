@@ -7,6 +7,7 @@ import { db as appDb } from '@/lib/db';
 import * as s from '@/db/schema';
 import type { AgeBand } from '@/lib/age-band';
 import { llmObject } from '@/lib/ai';
+import { llmText } from '@/lib/llm-schema';
 import { alertFounder } from '@/lib/alerts';
 import { getLearnerByUserId } from '@/server/learners';
 import { moderateText } from '@/server/moderation';
@@ -15,8 +16,8 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 // ── Tutor output schema ───────────────────────────────────────────────────────
 
 const tutorOutputSchema = z.object({
-  reply: z.string().max(700),
-  crisis: z.boolean(),
+  reply: llmText(700),
+  crisis: z.boolean(), // STRICT: boolean — safety-critical, downstream branches on this
 });
 
 type TutorOutput = z.infer<typeof tutorOutputSchema>;

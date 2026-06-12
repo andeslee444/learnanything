@@ -30,6 +30,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { LanguageModel } from 'ai';
 import * as s from '@/db/schema';
 import { llmObject } from '@/lib/ai';
+import { llmText } from '@/lib/llm-schema';
 import { moderateText } from '@/server/moderation';
 import { validateLessonContent } from './validate';
 import {
@@ -53,9 +54,9 @@ type Db = NodePgDatabase<typeof s>;
 // union in z.optional() so the field is absent for 'keep'/'drop' responses.
 
 const sanitizeBlockOutputSchema = z.object({
-  action: z.enum(['keep', 'rewrite', 'drop']),
+  action: z.enum(['keep', 'rewrite', 'drop']), // STRICT: enum — downstream logic branches on this
   block: lessonBlockSchema.optional(),
-  reason: z.string().max(200),
+  reason: llmText(200),
 });
 export type SanitizeBlockOutput = z.infer<typeof sanitizeBlockOutputSchema>;
 

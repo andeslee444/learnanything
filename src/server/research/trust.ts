@@ -3,6 +3,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { z } from 'zod';
 import * as s from '@/db/schema';
 import { llmObject } from '@/lib/ai';
+import { llmText } from '@/lib/llm-schema';
 import type { SearchSource } from './provider';
 
 type Db = NodePgDatabase<typeof s>;
@@ -29,12 +30,12 @@ export async function getBlocklist(db: Db): Promise<string[]> {
   return rows.map((r) => r.domain);
 }
 
-const vetSchema = z.object({
+export const vetSchema = z.object({
   verdicts: z.array(
     z.object({
       url: z.string(),
       trusted: z.boolean(),
-      reason: z.string().max(200),
+      reason: llmText(200),
     })
   ),
 });

@@ -251,7 +251,7 @@ describe('flashcardDeckSchema — bounds', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects flashcard_deck with more than 12 cards', async () => {
+  it('accepts flashcard_deck with more than 12 cards and truncates to 12 (llmArrayMax)', async () => {
     const { flashcardDeckSchema } = await import('./blocks');
     const result = flashcardDeckSchema.safeParse({
       type: 'flashcard_deck',
@@ -260,7 +260,8 @@ describe('flashcardDeckSchema — bounds', () => {
         back: `A${i + 1}`,
       })),
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.cards).toHaveLength(12);
   });
 
   it('rejects a card with an empty front string', async () => {
@@ -275,7 +276,7 @@ describe('flashcardDeckSchema — bounds', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects a card front exceeding 300 chars', async () => {
+  it('accepts and truncates a card front exceeding 300 chars (llmTextRequired)', async () => {
     const { flashcardDeckSchema } = await import('./blocks');
     const result = flashcardDeckSchema.safeParse({
       type: 'flashcard_deck',
@@ -284,10 +285,11 @@ describe('flashcardDeckSchema — bounds', () => {
         { front: 'Q2', back: 'A2' },
       ],
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.cards[0].front).toHaveLength(300);
   });
 
-  it('rejects a card back exceeding 500 chars', async () => {
+  it('accepts and truncates a card back exceeding 500 chars (llmTextRequired)', async () => {
     const { flashcardDeckSchema } = await import('./blocks');
     const result = flashcardDeckSchema.safeParse({
       type: 'flashcard_deck',
@@ -296,7 +298,8 @@ describe('flashcardDeckSchema — bounds', () => {
         { front: 'Q2', back: 'A2' },
       ],
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.cards[0].back).toHaveLength(500);
   });
 });
 
@@ -335,12 +338,13 @@ describe('workedExampleSchema — bounds', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects worked_example with more than 8 steps', async () => {
+  it('accepts and truncates worked_example with more than 8 steps (llmArrayMax)', async () => {
     const { workedExampleSchema } = await import('./blocks');
     const data = makeValidWorkedExample();
     data.steps = Array.from({ length: 9 }, (_, i) => ({ text: `Step ${i + 1} has some text here.` }));
     const result = workedExampleSchema.safeParse(data);
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.steps).toHaveLength(8);
   });
 
   it('rejects worked_example with a problem shorter than 8 chars', async () => {
@@ -351,12 +355,13 @@ describe('workedExampleSchema — bounds', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects worked_example with a problem exceeding 600 chars', async () => {
+  it('accepts and truncates a worked_example problem exceeding 600 chars (llmTextRequired)', async () => {
     const { workedExampleSchema } = await import('./blocks');
     const data = makeValidWorkedExample();
     data.problem = 'x'.repeat(601);
     const result = workedExampleSchema.safeParse(data);
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.problem).toHaveLength(600);
   });
 
   it('rejects a step with text shorter than 8 chars', async () => {
@@ -480,12 +485,13 @@ describe('animatedDiagramSchema — bounds', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects a shape text exceeding 60 chars', async () => {
+  it('accepts and truncates a shape text exceeding 60 chars (llmText)', async () => {
     const { animatedDiagramSchema } = await import('./blocks');
     const data = makeValidDiagram();
     data.shapes[0] = { ...data.shapes[0], text: 'x'.repeat(61) };
     const result = animatedDiagramSchema.safeParse(data);
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.shapes[0].text).toHaveLength(60);
   });
 
   it('rejects a shape id exceeding 40 chars', async () => {

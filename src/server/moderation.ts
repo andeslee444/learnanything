@@ -1,12 +1,13 @@
 import { z } from 'zod';
 import type { LanguageModel } from 'ai';
 import { llmObject } from '@/lib/ai';
+import { llmText } from '@/lib/llm-schema';
 import { alertFounder } from '@/lib/alerts';
 import type { AgeBand } from '@/lib/age-band';
 
-const moderationSchema = z.object({
+export const moderationSchema = z.object({
   allowed: z.boolean(),
-  reason: z.string().max(200),
+  reason: llmText(200),
 });
 export type ModerationResult = z.infer<typeof moderationSchema> & { errored?: boolean };
 
@@ -59,7 +60,7 @@ export async function moderateText(
       tier: 'classifier',
       schema: moderationSchema,
       system: systemWithBand,
-      prompt: `Context: ${context}\n<text>\n${text.slice(0, maxChars)}\n</text>`,
+      prompt: `Context: ${context}\nreason: one short sentence, under 150 characters.\n<text>\n${text.slice(0, maxChars)}\n</text>`,
       modelOverride: opts?.modelOverride,
     });
     // Alert the founder when content is flagged (not allowed).

@@ -4,6 +4,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { LanguageModel } from 'ai';
 import * as s from '@/db/schema';
 import { llmObject } from '@/lib/ai';
+import { llmText, llmTextRequired, llmArrayMax } from '@/lib/llm-schema';
 import { badgeFor } from './verdicts';
 import { articleBlockSchema } from './blocks';
 import { moderateText } from '@/server/moderation';
@@ -15,14 +16,14 @@ type Db = NodePgDatabase<typeof s>;
 
 const extractClaimsSchema = z.object({
   // 0–8 factual assertions. Definitions, opinions, and instructions are excluded.
-  claims: z.array(z.object({ claim: z.string().min(1).max(300) })).min(0).max(8),
+  claims: llmArrayMax(z.object({ claim: llmTextRequired(1, 300) }), 8),
 });
 
 const entailClaimSchema = z.object({
-  verdict: z.enum(['supported', 'unsupported']),
+  verdict: z.enum(['supported', 'unsupported']), // STRICT: enum — downstream logic branches on this
   // The LLM picks the supporting sourceUrl from the provided dossier list, or null.
   sourceUrl: z.string().nullable(),
-  note: z.string().max(200),
+  note: llmText(200),
 });
 
 /**

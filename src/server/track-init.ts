@@ -3,6 +3,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { z } from 'zod';
 import * as s from '@/db/schema';
 import { llmObject } from '@/lib/ai';
+import { llmText, llmTextRequired } from '@/lib/llm-schema';
 import { validateSkillGraph, type GraphInput } from '@/lib/skill-graph';
 
 type Db = NodePgDatabase<typeof s>;
@@ -11,9 +12,9 @@ export const skillGraphSchema = z.object({
   nodes: z
     .array(
       z.object({
-        name: z.string().min(2).max(120),
-        summary: z.string().max(300),
-        missionRelevance: z.number().min(0).max(1),
+        name: llmTextRequired(2, 120),
+        summary: llmText(300),
+        missionRelevance: z.number().min(0).max(1), // STRICT: [0,1] range — used for ranking
       })
     )
     .min(10)
@@ -26,10 +27,10 @@ export const calibrationQuizSchema = z.object({
     .array(
       z.object({
         id: z.string(),
-        question: z.string().min(8).max(400),
-        options: z.array(z.string().min(1).max(200)).length(4),
-        correctIndex: z.number().int().min(0).max(3),
-        conceptName: z.string().max(120),
+        question: llmTextRequired(8, 400),
+        options: z.array(llmTextRequired(1, 200)).length(4), // STRICT: length(4) — correctIndex indexes into this
+        correctIndex: z.number().int().min(0).max(3), // STRICT: structural index
+        conceptName: llmText(120),
       })
     )
     .min(2)

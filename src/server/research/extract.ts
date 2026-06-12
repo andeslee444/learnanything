@@ -1,20 +1,21 @@
 import { z } from 'zod';
 import { llmObject } from '@/lib/ai';
+import { llmText, llmTextRequired, llmArrayMax } from '@/lib/llm-schema';
 import type { SearchSource } from './provider';
 
 export const extractionSchema = z.object({
-  claims: z
-    .array(
-      z.object({
-        claim: z.string().min(8).max(400),
-        quote: z.string().max(600), // supporting span from the source, verbatim where possible
-      })
-    )
-    .max(12),
-  glossarySeeds: z
-    .array(z.object({ term: z.string().max(80), definition: z.string().max(300) }))
-    .max(8),
-  misconceptions: z.array(z.string().max(300)).max(5),
+  claims: llmArrayMax(
+    z.object({
+      claim: llmTextRequired(8, 400),
+      quote: llmText(600), // supporting span from the source, verbatim where possible
+    }),
+    12,
+  ),
+  glossarySeeds: llmArrayMax(
+    z.object({ term: llmText(80), definition: llmText(300) }),
+    8,
+  ),
+  misconceptions: llmArrayMax(llmText(300), 5),
 });
 export type Extraction = z.infer<typeof extractionSchema> & { sourceUrl: string };
 
